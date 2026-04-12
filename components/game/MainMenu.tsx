@@ -28,7 +28,15 @@ const BOOT_STATIC_MS = 3200
 const BOOT_TAIL_MS = 350
 /** Veil + static grain ease; longer reads smoother on screen. */
 const INTRO_FADE_MS = 2200
+/** Audio crossfade: static tails out while menu theme rises (can run longer than the veil). */
+const AUDIO_STATIC_FADE_OUT_MS = 3600
+const AUDIO_MENU_FADE_IN_MS = 3200
+/** Menu music starts after static has begun fading — overlap without a hard seam. */
+const AUDIO_MENU_FADE_DELAY_MS = 380
 const START_RUN_MS = 1400
+/** Visual snow eases in after power-on (matches static audio roughly). */
+const STATIC_VISUAL_FADE_IN_MS = 900
+const STATIC_AUDIO_FADE_IN_MS = 900
 
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3)
@@ -84,6 +92,7 @@ function useWhiteNoiseCanvas(staticBleedRef: MutableRefObject<number>) {
 }
 
 export function MainMenu({ onStart }: MainMenuProps) {
+  const [awaitingStandby, setAwaitingStandby] = useState(true)
   const [introOpaque, setIntroOpaque] = useState(true)
   const [introLayerMounted, setIntroLayerMounted] = useState(true)
   const [isVisible, setIsVisible] = useState(false)
@@ -92,50 +101,101 @@ export function MainMenu({ onStart }: MainMenuProps) {
   const [difficulty, setDifficulty] = useState<Difficulty>('medium')
   const [phase, setPhase] = useState<'title' | 'setup'>('title')
 
-  const staticBleedRef = useRef(1)
+  const justPoweredOnRef = useRef(false)
+  /** Released on effect cleanup so Strict Mode can run a second boot attempt. */
+  const menuBootIdleRef = useRef(true)
+  const staticBleedRef = useRef(0)
+  const bleedInRafRef = useRef<number | null>(null)
   const noiseRef = useWhiteNoiseCanvas(staticBleedRef)
 
-  useEffect(() => {
-    let cancelled = false
+  const handleTvPowerOn = useCallback(async () => {
+    try {
+      await AudioManager.initialize()
+      await AudioManager.resume()
+    } catch {
+      // still continue boot; audio may be limited
+    }
+    justPoweredOnRef.current = true
+    setAwaitingStandby(false)
+  }, [])
 
+  useEffect(() => {
+    if (awaitingStandby) return
+    if (!justPoweredOnRef.current) return
+    if (!menuBootIdleRef.current) return
+    menuBootIdleRef.current = false
+
+    let cancelled = false
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
     const boot = async () => {
-      const initPromise = AudioManager.initialize().catch(() => undefined)
+      const runBleedIn = () => {
+        staticBleedRef.current = 0
+        if (bleedInRafRef.current !== null) cancelAnimationFrame(bleedInRafRef.current)
+        const t0 = performance.now()
+        const tick = (now: number) => {
+          if (cancelled) return
+          const u = Math.min(1, (now - t0) / STATIC_VISUAL_FADE_IN_MS)
+          staticBleedRef.current = easeOutCubic(u)
+          if (u < 1) {
+            bleedInRafRef.current = requestAnimationFrame(tick)
+          } else {
+            bleedInRafRef.current = null
+          }
+        }
+        bleedInRafRef.current = requestAnimationFrame(tick)
+      }
 
-      await sleep(BOOT_STATIC_MS)
-      if (cancelled) return
+      const initPromise = AudioManager.initialize().catch(() => undefined)
 
       await initPromise
       if (cancelled) return
 
-      setIsMuted(AudioManager.getSettings().muted)
+      runBleedIn()
+      AudioManager.startMenuTvStaticLoop(STATIC_AUDIO_FADE_IN_MS)
 
-      // Autoplay policy: resume() may stay pending until a gesture — never block the menu on it.
-      void AudioManager.resume()
-        .catch(() => undefined)
-        .then(() => {
-          void AudioManager.playMusic('MUSIC_MENU')
-        })
+      await sleep(BOOT_STATIC_MS)
+      if (cancelled) return
+
+      setIsMuted(AudioManager.getSettings().muted)
+      AudioManager.beginMenuMusicSilentStart()
+      await AudioManager.playMusic('MUSIC_MENU')
+      await AudioManager.resume().catch(() => undefined)
 
       await sleep(BOOT_TAIL_MS)
       if (cancelled) return
 
       setIntroOpaque(false)
       setIsVisible(true)
+      AudioManager.crossfadeMenuStaticToMusic({
+        staticFadeOutMs: AUDIO_STATIC_FADE_OUT_MS,
+        musicFadeInMs: AUDIO_MENU_FADE_IN_MS,
+        musicDelayMs: AUDIO_MENU_FADE_DELAY_MS,
+      })
+      justPoweredOnRef.current = false
     }
 
-    void boot()
+    void boot().finally(() => {
+      menuBootIdleRef.current = true
+    })
+
     return () => {
       cancelled = true
+      menuBootIdleRef.current = true
+      if (bleedInRafRef.current !== null) {
+        cancelAnimationFrame(bleedInRafRef.current)
+        bleedInRafRef.current = null
+      }
     }
-  }, [])
+  }, [awaitingStandby])
 
   useEffect(() => {
-    if (introOpaque) {
-      staticBleedRef.current = 1
-      return
-    }
+    if (awaitingStandby) staticBleedRef.current = 0
+  }, [awaitingStandby])
+
+  useEffect(() => {
+    if (awaitingStandby) return
+    if (introOpaque) return
 
     const start = performance.now()
     let frame: number
@@ -150,7 +210,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
     }
     frame = requestAnimationFrame(step)
     return () => cancelAnimationFrame(frame)
-  }, [introOpaque])
+  }, [introOpaque, awaitingStandby])
 
   const goToSetup = async () => {
     await AudioManager.resume()
@@ -225,6 +285,15 @@ export function MainMenu({ onStart }: MainMenuProps) {
           50% { opacity: 0.09; transform: translate(-1%, 0.5%); }
           100% { opacity: 0.04; transform: translate(0, 0); }
         }
+        @keyframes tv-standby-blink {
+          0%, 100% { opacity: 1; filter: brightness(1); }
+          45% { opacity: 0.14; filter: brightness(0.65); }
+          50% { opacity: 0.14; filter: brightness(0.65); }
+        }
+        @keyframes tv-click-hint {
+          0%, 100% { opacity: 0.22; }
+          50% { opacity: 1; }
+        }
         .main-menu-pixel {
           image-rendering: pixelated;
           image-rendering: crisp-edges;
@@ -252,6 +321,44 @@ export function MainMenu({ onStart }: MainMenuProps) {
           background: `radial-gradient(ellipse 40% 30% at 70% 20%, rgba(60,20,24,0.22) 0%, transparent 70%)`,
         }}
       />
+
+      {awaitingStandby && (
+        <button
+          type="button"
+          className="absolute inset-0 z-[50] flex cursor-pointer flex-col items-center justify-center gap-8 border-0 bg-[#020101] p-8 outline-none transition-colors hover:bg-[#050302] focus-visible:ring-2 focus-visible:ring-[#5a2828] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+          onClick={handleTvPowerOn}
+          aria-label="Click to power on the display"
+        >
+          <span className="sr-only">Click anywhere to power on the display</span>
+          <span
+            className="h-2.5 w-2.5 shrink-0 rounded-full"
+            style={{
+              backgroundColor: MENU.bloodHi,
+              boxShadow: `0 0 10px ${MENU.bloodHi}, 0 0 22px rgba(140, 36, 42, 0.45)`,
+              animation: 'tv-standby-blink 1.25s ease-in-out infinite',
+            }}
+            aria-hidden
+          />
+          <p
+            className="text-center uppercase tracking-[0.55em]"
+            style={{
+              color: MENU.boneDim,
+              ...mono,
+              fontSize: '13px',
+              textShadow: '0 0 24px rgba(90, 40, 40, 0.35)',
+              animation: 'tv-click-hint 1.05s ease-in-out infinite',
+            }}
+          >
+            click
+          </p>
+          <p
+            className="text-center uppercase tracking-[0.42em] opacity-50"
+            style={{ color: MENU.whisper, ...mono, fontSize: '9px' }}
+          >
+            standby
+          </p>
+        </button>
+      )}
 
       {/* Dark veil + static: fades out automatically (no text, no click). */}
       {introLayerMounted && (
