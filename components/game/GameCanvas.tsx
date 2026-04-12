@@ -6,6 +6,7 @@ import { GAME, type GameState, type Difficulty } from '@/lib/game/utils/constant
 import { ROOM_CONFIGS } from '@/lib/game/rooms/roomData';
 import type { Upgrade } from '@/lib/game/upgrades/Upgrade';
 import { AudioManager } from '@/lib/game/audio/AudioManager';
+import { createGameGlPresenter } from '@/lib/game/rendering/webglHorrorPresent';
 import { GameUI } from './GameUI';
 import { MainMenu } from './MainMenu';
 import { PauseMenu } from './PauseMenu';
@@ -13,8 +14,10 @@ import { UpgradeModal } from './UpgradeModal';
 import { GameOverScreen } from './GameOverScreen';
 
 export function GameCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bufferRef = useRef<HTMLCanvasElement>(null);
+  const glRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<Game | null>(null);
+  const [displayMode, setDisplayMode] = useState<'webgl' | 'canvas2d'>('canvas2d');
   
   const [gameState, setGameState] = useState<GameState>('MENU');
   const [health, setHealth] = useState({ current: 3, max: 3 });
@@ -50,16 +53,19 @@ export function GameCanvas() {
     };
   }, [primeAudioFromGesture]);
 
-  // Initialize game
+  // Native-res 2D buffer + WebGL present (or single 2D canvas if WebGL missing)
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const buffer = bufferRef.current;
+    const glCanvas = glRef.current;
+    if (!buffer || !glCanvas) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = buffer.getContext('2d');
     if (!ctx) return;
 
-    // Disable image smoothing for pixel art
     ctx.imageSmoothingEnabled = false;
+
+    const presenter = createGameGlPresenter(glCanvas);
+    setDisplayMode(presenter ? 'webgl' : 'canvas2d');
 
     const game = new Game(ctx, {
       onStateChange: setGameState,
@@ -67,12 +73,14 @@ export function GameCanvas() {
       onRoomChange: (current, total) => setRoomInfo({ current, total }),
       onUpgradeSelect: setUpgrades,
       onGameOver: (victory) => setIsVictory(victory),
+      onPresentFrame: presenter ? (src, u) => presenter.present(src, u) : undefined,
     });
 
-    game.attach(canvas);
+    game.attach(presenter ? glCanvas : buffer);
     gameRef.current = game;
 
     return () => {
+      presenter?.dispose();
       game.detach();
       gameRef.current = null;
     };
@@ -111,13 +119,28 @@ export function GameCanvas() {
         }}
       >
         <canvas
-          ref={canvasRef}
+          ref={bufferRef}
           width={GAME.NATIVE_WIDTH}
           height={GAME.NATIVE_HEIGHT}
-          className="w-full h-full"
-          style={{ 
+          className={
+            displayMode === 'webgl'
+              ? 'pointer-events-none absolute left-0 top-0 h-px w-px opacity-0'
+              : 'h-full w-full'
+          }
+          style={{
             imageRendering: 'pixelated',
-            cursor: gameState === 'PLAYING' ? 'crosshair' : 'default',
+            cursor: displayMode === 'canvas2d' && gameState === 'PLAYING' ? 'crosshair' : 'default',
+          }}
+          aria-hidden={displayMode === 'webgl'}
+        />
+        <canvas
+          ref={glRef}
+          width={GAME.DISPLAY_WIDTH}
+          height={GAME.DISPLAY_HEIGHT}
+          className={displayMode === 'webgl' ? 'h-full w-full' : 'hidden'}
+          style={{
+            imageRendering: 'pixelated',
+            cursor: displayMode === 'webgl' && gameState === 'PLAYING' ? 'crosshair' : 'default',
           }}
         />
 
