@@ -47,8 +47,8 @@ Adapt to survive the deeper levels:
 ---
 
 ### 🛠️ ARCHITECTURE & TECH
-This game was heavily "vibecoded" under strict game jam time constraints.
-* **Engine:** [Phaser 3](https://phaser.io/) (Arcade Physics)
+This game was heavily slopped under strict time constraints.
+* **Engine:** (ReactJS) (Arcade Physics)
 * **UI/Menus:** React & TailwindCSS
 * **State Management:** Custom Global Entity Pool
 * **Theme:** "Box" & "Spiders"
