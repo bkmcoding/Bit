@@ -21,6 +21,8 @@ import { hiveMindSteerUnit, type HiveRole } from '../systems/HiveMind';
 import { Vector2 } from '../utils/Vector2';
 import { resolveCircleObstacles } from '../utils/obstacleCollision';
 import { ParticleSystem } from '../rendering/particles';
+import type { GamePostUniforms } from '../rendering/webglHorrorPresent';
+import { getMoonShaftForRoom } from '../rendering/roomMoonlight';
 import { AudioManager } from '../audio/AudioManager';
 import type { Upgrade } from '../upgrades/Upgrade';
 
@@ -30,6 +32,8 @@ export interface GameCallbacks {
   onRoomChange?: (roomIndex: number, totalRooms: number) => void;
   onUpgradeSelect?: (upgrades: Upgrade[]) => void;
   onGameOver?: (victory: boolean) => void;
+  /** WebGL post: native-res buffer → GPU. When set, Canvas horror overlay is skipped. */
+  onPresentFrame?: (source: HTMLCanvasElement, uniforms: GamePostUniforms) => void;
 }
 
 export class Game {
@@ -337,7 +341,22 @@ export class Game {
 
     ctx.restore();
 
-    if (this.state !== 'MENU') {
+    if (this.callbacks.onPresentFrame) {
+      const moon = getMoonShaftForRoom(this.roomManager.currentRoomIndex);
+      const showFx = this.state !== 'MENU';
+      this.callbacks.onPresentFrame(this.ctx.canvas, {
+        time: performance.now() / 1000,
+        playerX: this.player.position.x / GAME.NATIVE_WIDTH,
+        playerY: this.player.position.y / GAME.NATIVE_HEIGHT,
+        reactiveMood: showFx ? 1 : 0,
+        moonOriginX: moon.originX,
+        moonOriginY: moon.originY,
+        moonDirX: moon.dirX,
+        moonDirY: moon.dirY,
+        moonSpread: moon.spread,
+        moonStrength: showFx ? moon.strength : 0,
+      });
+    } else if (this.state !== 'MENU') {
       this.renderHorrorOverlay(ctx);
     }
   }
