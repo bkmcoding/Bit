@@ -22,6 +22,29 @@ export function GameCanvas() {
   const [upgrades, setUpgrades] = useState<Upgrade[]>([]);
   const [isVictory, setIsVictory] = useState(false);
 
+  const gameStateRef = useRef<GameState>('MENU');
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
+  /** Browsers require a gesture before audio; first pointer or key unlocks + menu track when on the menu. */
+  const audioGestureDoneRef = useRef(false);
+  const primeAudioFromGesture = useCallback(() => {
+    if (audioGestureDoneRef.current) return;
+    audioGestureDoneRef.current = true;
+    void (async () => {
+      await AudioManager.resume();
+      if (gameStateRef.current === 'MENU') {
+        await AudioManager.playMusic('MUSIC_MENU');
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener('keydown', primeAudioFromGesture, { passive: true });
+    return () => window.removeEventListener('keydown', primeAudioFromGesture);
+  }, [primeAudioFromGesture]);
+
   // Initialize game
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -74,7 +97,10 @@ export function GameCanvas() {
   }, []);
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-black">
+    <div
+      className="relative w-full h-full flex items-center justify-center bg-black"
+      onPointerDownCapture={primeAudioFromGesture}
+    >
       <div 
         className="relative"
         style={{ 

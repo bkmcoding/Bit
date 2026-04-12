@@ -3,29 +3,23 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const _geist = Geist({ subsets: ['latin'] })
+const _geistMono = Geist_Mono({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Box Crawler - Spider Roguelike',
-  description: 'A tiny bug in a big, scary world. Navigate box rooms filled with spider enemies in this roguelike shooter.',
-  generator: 'v0.app',
+  title: 'Bit - The Bug in the Box',
+  description:
+    'A tiny bug in a big, scary world. Navigate box rooms filled with spider enemies in this roguelike shooter.',
   icons: {
     icon: [
       {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
+        url: '/icon.png',
       },
       {
         url: '/icon.svg',
         type: 'image/svg+xml',
       },
     ],
-    apple: '/apple-icon.png',
   },
 }
 

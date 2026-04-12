@@ -112,7 +112,11 @@ class AudioManagerClass {
   private horrorOscillators: OscillatorNode[] = [];
   private ambienceWhite: AmbienceLayer | null = null;
   private ambienceCave: AmbienceLayer | null = null;
+  /** Low rumble when no `cave` MP3 is present (distinct from white noise). */
+  private ambienceCaveOsc: { gain: GainNode; oscillators: OscillatorNode[] } | null = null;
   private skitterCooldownUntil: number = 0;
+  /** Serializes track switches so concurrent playMusic (e.g. menu unlock + start game) cannot overlap. */
+  private musicSwitchQueue: Promise<void> = Promise.resolve();
   private settings: AudioSettings = { ...DEFAULT_SETTINGS };
   private isInitialized: boolean = false;
   private loadedPaths: Set<string> = new Set();
@@ -409,11 +413,39 @@ class AudioManagerClass {
     }
   }
 
+  /**
+   * Same track already running — keep buffers/horror/ambience going (e.g. every room load).
+   */
+  private shouldKeepCurrentMusicTrack(track: MusicTrack): boolean {
+    if (this.currentMusicTrack !== track) return false;
+    if (this.currentMusic !== null) return true;
+    if (
+      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS') &&
+      this.horrorOscillators.length > 0
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   // Music control
   async playMusic(track: MusicTrack): Promise<void> {
+    const scheduled = this.musicSwitchQueue.then(() => this.runPlayMusic(track));
+    this.musicSwitchQueue = scheduled.catch(() => {
+      // Keep the queue alive if one switch throws
+    });
+    return scheduled;
+  }
+
+  private async runPlayMusic(track: MusicTrack): Promise<void> {
     if (!this.audioContext || !this.isInitialized) return;
 
-    this.stopMusic();
+    if (this.shouldKeepCurrentMusicTrack(track)) {
+      this.updateMusicVolume();
+      return;
+    }
+
+    this.hardStopMusicAndBeds();
     this.currentMusicTrack = track;
 
     let buffer: AudioBuffer | null = null;
@@ -435,34 +467,54 @@ class AudioManagerClass {
 
     this.currentMusic = this.audioContext.createBufferSource();
     this.currentMusicGain = this.audioContext.createGain();
-    
+
     this.currentMusic.buffer = buffer;
     this.currentMusic.loop = true;
-    
-    const volume = this.settings.muted ? 0 : 
+
+    const volume = this.settings.muted ? 0 :
       this.settings.musicVolume * this.settings.masterVolume;
     this.currentMusicGain.gain.value = volume;
-    
+
     this.currentMusic.connect(this.currentMusicGain);
     this.currentMusicGain.connect(this.audioContext.destination);
-    
+
     this.currentMusic.start(0);
     this.syncHorrorWithTrack(track);
     await this.refreshAmbienceLoops(track);
   }
 
-  stopMusic(): void {
+  /**
+   * Stops the looping music buffer and tears down horror + ambience beds.
+   * Used when switching tracks so nothing from the previous mode keeps playing.
+   */
+  hardStopMusicAndBeds(): void {
     if (this.currentMusic) {
       try {
         this.currentMusic.stop();
       } catch {
         // Already stopped
       }
+      try {
+        this.currentMusic.disconnect();
+      } catch {
+        // ignore
+      }
       this.currentMusic = null;
+    }
+    if (this.currentMusicGain) {
+      try {
+        this.currentMusicGain.disconnect();
+      } catch {
+        // ignore
+      }
       this.currentMusicGain = null;
     }
     this.stopAmbienceLoops();
     this.stopHorrorAmbience();
+  }
+
+  stopMusic(): void {
+    this.hardStopMusicAndBeds();
   }
 
   private stopHorrorAmbience(): void {
@@ -527,6 +579,18 @@ class AudioManagerClass {
     }
   }
 
+  private stopCaveOscillatorBed(): void {
+    if (!this.ambienceCaveOsc) return;
+    for (const o of this.ambienceCaveOsc.oscillators) {
+      try {
+        o.stop();
+      } catch {
+        // ignore
+      }
+    }
+    this.ambienceCaveOsc = null;
+  }
+
   private stopAmbienceLoops(): void {
     for (const layer of [this.ambienceWhite, this.ambienceCave]) {
       if (!layer) continue;
@@ -538,6 +602,7 @@ class AudioManagerClass {
     }
     this.ambienceWhite = null;
     this.ambienceCave = null;
+    this.stopCaveOscillatorBed();
   }
 
   private updateAmbienceLoopGains(): void {
@@ -555,6 +620,10 @@ class AudioManagerClass {
         Math.max(0, this.settings.ambienceCaveVolume) * m,
         t
       );
+    }
+    if (this.ambienceCaveOsc) {
+      const v = Math.max(0, this.settings.ambienceCaveVolume) * m * 0.055;
+      this.ambienceCaveOsc.gain.gain.setValueAtTime(v, t);
     }
   }
 
@@ -575,6 +644,11 @@ class AudioManagerClass {
       buffer = await this.loadSound(p);
       if (buffer) break;
     }
+    if (slot === 'cave' && !buffer) {
+      this.startCaveOscillatorBed();
+      return;
+    }
+
     if (!buffer) return;
 
     const source = this.audioContext.createBufferSource();
@@ -587,6 +661,35 @@ class AudioManagerClass {
 
     if (slot === 'white') this.ambienceWhite = { source, gain };
     else this.ambienceCave = { source, gain };
+    this.updateAmbienceLoopGains();
+  }
+
+  /** Sub-bass / stone-room tone when no cave ambience file is installed. */
+  private startCaveOscillatorBed(): void {
+    if (!this.audioContext || this.settings.muted) return;
+    this.stopCaveOscillatorBed();
+
+    const ctx = this.audioContext;
+    const g = ctx.createGain();
+    const o1 = ctx.createOscillator();
+    o1.type = 'sine';
+    o1.frequency.value = 39;
+    const o2 = ctx.createOscillator();
+    o2.type = 'sine';
+    o2.frequency.value = 63;
+    const o3 = ctx.createOscillator();
+    o3.type = 'triangle';
+    o3.frequency.value = 21;
+
+    o1.connect(g);
+    o2.connect(g);
+    o3.connect(g);
+    g.connect(ctx.destination);
+    o1.start();
+    o2.start();
+    o3.start();
+
+    this.ambienceCaveOsc = { gain: g, oscillators: [o1, o2, o3] };
     this.updateAmbienceLoopGains();
   }
 

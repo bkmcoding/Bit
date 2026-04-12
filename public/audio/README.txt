@@ -19,9 +19,10 @@ public/audio/
 ├── menu-music.mp3      (Background music for main menu)
 ├── game-music.mp3      (Background music during gameplay)
 ├── boss-music.mp3      (Background music for boss fight)
-├── ambience/           (Optional looping beds — configure volume on the setup screen)
+├── ambience/           (Optional looping beds — volumes in lib/game/settings/atmosphere-audio.ts)
 │   ├── white-noise.mp3   (Harsh static / wind; also tries ambience_white_noise.mp3)
 │   └── cave.mp3          (Drips, rumble; also tries ambience-cave.mp3)
+│                           If missing, a low synthesized “room rumble” still plays when caveVolume > 0.
 └── sfx/
     ├── shoot.mp3       (Player shooting)
     ├── hit.mp3         (Player projectile hitting enemy)

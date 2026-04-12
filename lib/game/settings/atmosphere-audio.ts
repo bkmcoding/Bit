@@ -5,18 +5,18 @@
  */
 export interface AtmosphereAudioSettings {
   /** 0–1. Looping white-noise / static bed during gameplay & boss. */
-  whiteNoiseVolume: number;
-  /** 0–1. Looping cave / drip bed (layers with white noise). */
-  caveVolume: number;
+  whiteNoiseVolume: number
+  /** 0–1. Cave / room tone (MP3 if present in `public/audio/ambience/`, else low synth rumble). */
+  caveVolume: number
   /** Proximity chitin / leg one-shots when enemies move near the player. */
-  enemySkitterEnabled: boolean;
+  enemySkitterEnabled: boolean
   /** 0–1. Scales skitter SFX (with master × SFX volume). */
-  enemySkitterVolume: number;
+  enemySkitterVolume: number
 }
 
 export const ATMOSPHERE_AUDIO_SETTINGS: AtmosphereAudioSettings = {
-  whiteNoiseVolume: 0,
-  caveVolume: 0,
+  whiteNoiseVolume: 0.5,
+  caveVolume: 0.5,
   enemySkitterEnabled: true,
   enemySkitterVolume: 0.55,
-};
+}

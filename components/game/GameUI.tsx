@@ -1,4 +1,4 @@
-import { COLORS } from '@/lib/game/utils/constants';
+import { PixelHeart } from './PixelHeart';
 
 interface GameUIProps {
   health: number;
@@ -11,19 +11,13 @@ export function GameUI({ health, maxHealth, currentRoom, totalRooms }: GameUIPro
   return (
     <div className="absolute inset-0 pointer-events-none">
       {/* Health display */}
-      <div className="absolute top-4 left-4 flex gap-1">
+      <div
+        className="absolute top-4 left-4 flex gap-0.5 items-center"
+        role="status"
+        aria-label={`Health ${health} of ${maxHealth}`}
+      >
         {Array.from({ length: maxHealth }).map((_, i) => (
-          <div
-            key={i}
-            className="w-6 h-6 flex items-center justify-center"
-            style={{
-              color: i < health ? COLORS.HEART_FULL : COLORS.HEART_EMPTY,
-              textShadow: '1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000',
-              fontSize: '20px',
-            }}
-          >
-            &#9829;
-          </div>
+          <PixelHeart key={i} filled={i < health} />
         ))}
       </div>
 
