@@ -60,7 +60,7 @@ To build the box and run the game locally:
 
 ```bash
 # Clone the repository
-git clone [https://github.com/yourusername/bit.git](https://github.com/yourusername/bit.git)
+git clone https://github.com/bkmcoding/bit.git
 
 # Navigate to the directory
 cd bit
