@@ -441,9 +441,12 @@ export class Game {
   // Add an enemy to the game
   spawnEnemy(enemy: Enemy): void {
     const s = DIFFICULTY_SETTINGS[this.difficulty];
-    enemy.maxHealth = Math.max(1, Math.round(enemy.maxHealth * s.enemyHealthMult));
+    const boss = enemy instanceof Broodmother;
+    const hMult = s.enemyHealthMult * (boss ? s.bossHealthMult : 1);
+    const dMult = s.enemyDamageMult * (boss ? s.bossDamageMult : 1);
+    enemy.maxHealth = Math.max(1, Math.round(enemy.maxHealth * hMult));
     enemy.health = enemy.maxHealth;
-    enemy.damage = Math.max(1, Math.round(enemy.damage * s.enemyDamageMult));
+    enemy.damage = Math.max(1, Math.round(enemy.damage * dMult));
     enemy.speed *= s.enemySpeedMult;
     this.enemies.push(enemy);
   }

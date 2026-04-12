@@ -9,6 +9,9 @@ import type { Game } from '../../engine/Game';
 
 type BossPhase = 'idle' | 'spawning' | 'shooting' | 'charging';
 
+/** Health fraction at which Broodmother enrages (second life stage). */
+const STAGE2_THRESHOLD = 0.5;
+
 export class Broodmother extends Enemy {
   private phase: BossPhase = 'idle';
   private phaseTimer: number = 2;
@@ -16,60 +19,102 @@ export class Broodmother extends Enemy {
   private shootCooldown: number = 0;
   private legAnimation: number = 0;
   private spawnedChildren: number = 0;
-  private maxChildren: number = 5;
+  private prevLifeStage: 1 | 2 = 1;
+  private enragePulse: number = 0;
 
   constructor(position: Vector2, game: Game) {
     super(position, ENEMY.BROODMOTHER, game);
-    // Play boss roar on spawn
     AudioManager.play('SFX_BOSS_ROAR');
+  }
+
+  private getLifeStage(): 1 | 2 {
+    return this.health <= this.maxHealth * STAGE2_THRESHOLD ? 2 : 1;
+  }
+
+  private broodCap(): number {
+    return this.getLifeStage() === 2 ? 8 : 5;
+  }
+
+  private spawnInterval(): number {
+    return this.getLifeStage() === 2 ? 0.36 : 0.72;
+  }
+
+  private shootInterval(): number {
+    return this.getLifeStage() === 2 ? 0.24 : 0.52;
+  }
+
+  private spreadCount(): number {
+    return this.getLifeStage() === 2 ? 7 : 5;
+  }
+
+  private spreadArc(): number {
+    return this.getLifeStage() === 2 ? Math.PI * 0.45 : Math.PI / 3;
+  }
+
+  private projSpeed(): number {
+    return this.getLifeStage() === 2 ? 86 : 70;
+  }
+
+  private chargeSpeedMult(): number {
+    return this.getLifeStage() === 2 ? 2.85 : 2;
   }
 
   protected updateBehavior(deltaTime: number): void {
     this.legAnimation += deltaTime * 4;
+    const stage = this.getLifeStage();
+    if (stage === 2 && this.prevLifeStage === 1) {
+      AudioManager.play('SFX_BOSS_ROAR');
+      this.game.shake(12);
+      this.phase = 'charging';
+      this.phaseTimer = 0.35;
+      this.spawnedChildren = 0;
+    }
+    this.prevLifeStage = stage;
+    if (stage === 2) {
+      this.enragePulse += deltaTime * 5;
+    }
+
     this.phaseTimer -= deltaTime;
-    
-    // Count current children
+
     const currentChildren = this.game.enemies.filter(
       e => e instanceof Spider && e.isActive && !e.markedForDeletion
     ).length;
-    
-    // Phase transitions
+
     if (this.phaseTimer <= 0) {
       this.nextPhase(currentChildren);
     }
-    
-    // Execute current phase behavior
+
     switch (this.phase) {
       case 'idle':
         this.velocity.mulMut(0.95);
         break;
-        
+
       case 'spawning':
         this.velocity.mulMut(0.95);
         this.spawnCooldown -= deltaTime;
-        if (this.spawnCooldown <= 0 && currentChildren < this.maxChildren) {
+        if (this.spawnCooldown <= 0 && currentChildren < this.broodCap()) {
           this.spawnChild();
-          this.spawnCooldown = 0.72;
+          this.spawnCooldown = this.spawnInterval();
           this.spawnedChildren++;
         }
         break;
-        
+
       case 'shooting':
         this.velocity.mulMut(0.95);
         this.shootCooldown -= deltaTime;
         if (this.shootCooldown <= 0) {
           this.shootSpread();
-          this.shootCooldown = 0.52;
+          this.shootCooldown = this.shootInterval();
         }
         break;
-        
-      case 'charging':
+
+      case 'charging': {
         const dirToPlayer = this.getDirectionToPlayer();
-        this.velocity = dirToPlayer.mul(this.speed * 2);
+        this.velocity = dirToPlayer.mul(this.speed * this.chargeSpeedMult());
         break;
+      }
     }
-    
-    // Keep in bounds (boss is larger)
+
     const room = this.game.getCurrentRoom();
     if (room) {
       const halfSize = this.size / 2;
@@ -77,7 +122,7 @@ export class Broodmother extends Enemy {
       const maxX = GAME.NATIVE_WIDTH - room.wallThickness - halfSize;
       const minY = room.wallThickness + halfSize;
       const maxY = GAME.NATIVE_HEIGHT - room.wallThickness - halfSize;
-      
+
       this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
       this.position.y = Math.max(minY, Math.min(maxY, this.position.y));
       const obs = room.getObstacleRects();
@@ -90,134 +135,152 @@ export class Broodmother extends Enemy {
   }
 
   private nextPhase(currentChildren: number): void {
-    // Choose next phase based on health and situation
+    const stage = this.getLifeStage();
+    const cap = this.broodCap();
+
+    if (stage === 2) {
+      const r = Math.random();
+      if (r < 0.38) {
+        this.phase = 'charging';
+        this.phaseTimer = 2.1 + Math.random() * 0.5;
+      } else if (r < 0.82) {
+        this.phase = 'shooting';
+        this.phaseTimer = 3.4 + Math.random() * 0.6;
+      } else if (currentChildren < cap - 1) {
+        this.phase = 'spawning';
+        this.phaseTimer = 2.8;
+        this.spawnedChildren = 0;
+        this.spawnCooldown = 0.2;
+      } else {
+        this.phase = Math.random() < 0.55 ? 'shooting' : 'charging';
+        this.phaseTimer = this.phase === 'shooting' ? 2.8 : 1.9;
+      }
+      return;
+    }
+
     const healthPercent = this.health / this.maxHealth;
-    
-    if (healthPercent < 0.3) {
-      // Low health: more aggressive
-      this.phase = Math.random() < 0.6 ? 'charging' : 'shooting';
-      this.phaseTimer = this.phase === 'charging' ? 2 : 3;
-    } else if (currentChildren < 2 && Math.random() < 0.4) {
-      // Few children, spawn more
+    if (healthPercent < 0.35) {
+      this.phase = Math.random() < 0.55 ? 'charging' : 'shooting';
+      this.phaseTimer = this.phase === 'charging' ? 1.85 : 2.6;
+    } else if (currentChildren < 2 && Math.random() < 0.42) {
       this.phase = 'spawning';
       this.phaseTimer = 3;
       this.spawnedChildren = 0;
+      this.spawnCooldown = 0.35;
     } else {
-      // Random between shooting and charging
       const rand = Math.random();
-      if (rand < 0.3) {
+      if (rand < 0.28) {
         this.phase = 'idle';
-        this.phaseTimer = 1.5;
-      } else if (rand < 0.6) {
+        this.phaseTimer = 1.4;
+      } else if (rand < 0.58) {
         this.phase = 'shooting';
-        this.phaseTimer = 2.5;
+        this.phaseTimer = 2.4;
       } else {
         this.phase = 'charging';
-        this.phaseTimer = 2;
+        this.phaseTimer = 1.85;
       }
     }
   }
 
   private spawnChild(): void {
-    // Spawn a spider at random offset from boss
     const angle = Math.random() * Math.PI * 2;
     const distance = this.size / 2 + 10;
-    const spawnPos = this.position.add(new Vector2(
-      Math.cos(angle) * distance,
-      Math.sin(angle) * distance
-    ));
-    
+    const spawnPos = this.position.add(
+      new Vector2(Math.cos(angle) * distance, Math.sin(angle) * distance)
+    );
+
     const spider = new Spider(spawnPos, this.game);
     this.game.spawnEnemy(spider);
   }
 
   private shootSpread(): void {
-    // Shoot 5 projectiles in a spread pattern
     const baseAngle = this.position.angleTo(this.game.player.position);
-    const spread = Math.PI / 3; // 60 degree spread
-    
-    for (let i = 0; i < 5; i++) {
-      const angle = baseAngle + (i - 2) * (spread / 4);
+    const n = this.spreadCount();
+    const spread = this.spreadArc();
+    const half = (n - 1) / 2;
+
+    for (let i = 0; i < n; i++) {
+      const angle = baseAngle + (i - half) * (spread / Math.max(1, n - 1));
       const direction = new Vector2(Math.cos(angle), Math.sin(angle));
-      
+
       const projectile = new Projectile({
         position: this.position.clone(),
         direction,
         isPlayerProjectile: false,
         damage: this.damage,
-        speed: 70,
+        speed: this.projSpeed(),
       });
-      
+
       this.game.spawnProjectile(projectile);
     }
   }
 
   protected die(): void {
-    // Boss death - screen shake
     this.game.shake(15);
     super.die();
   }
 
   protected renderEnemy(ctx: CanvasRenderingContext2D): void {
     const legOffset = Math.sin(this.legAnimation) * 2;
-    
-    // Draw 8 large legs
+    const stage = this.getLifeStage();
+
     ctx.strokeStyle = '#0a0202';
     ctx.lineWidth = 2;
-    
+
     for (let i = 0; i < 4; i++) {
-      const offset = (i % 2 === 0 ? legOffset : -legOffset);
+      const offset = i % 2 === 0 ? legOffset : -legOffset;
       const yPos = (i - 1.5) * 6;
-      
-      // Left legs (articulated)
+
       ctx.beginPath();
       ctx.moveTo(-8, yPos);
       ctx.lineTo(-16, yPos - 4 + offset);
       ctx.lineTo(-20 + offset, yPos + 2);
       ctx.stroke();
-      
-      // Right legs
+
       ctx.beginPath();
       ctx.moveTo(8, yPos);
       ctx.lineTo(16, yPos - 4 - offset);
       ctx.lineTo(20 - offset, yPos + 2);
       ctx.stroke();
     }
-    
-    // Main body (cephalothorax)
+
     ctx.fillStyle = this.flashTimer > 0 ? '#ffffff' : COLORS.BROODMOTHER_BODY;
     ctx.beginPath();
     ctx.ellipse(0, -4, 10, 8, 0, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Large abdomen
+
     ctx.fillStyle = this.flashTimer > 0 ? '#ffffff' : '#2a0808';
     ctx.beginPath();
     ctx.ellipse(0, 10, 12, 14, 0, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Abdomen pattern
+
     ctx.fillStyle = '#400a0a';
     ctx.beginPath();
     ctx.ellipse(0, 8, 6, 8, 0, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Multiple eyes (8 eyes for a spider!)
+
+    if (stage === 2) {
+      const pulse = 0.35 + Math.sin(this.enragePulse) * 0.2;
+      ctx.strokeStyle = `rgba(255,60,40,${pulse})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 4, 18 + Math.sin(this.enragePulse * 1.3) * 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     ctx.fillStyle = COLORS.SPIDER_EYES;
-    // Main eyes
     ctx.beginPath();
     ctx.arc(-4, -8, 2, 0, Math.PI * 2);
     ctx.arc(4, -8, 2, 0, Math.PI * 2);
     ctx.fill();
-    // Secondary eyes
+
     ctx.beginPath();
     ctx.arc(-6, -5, 1.5, 0, Math.PI * 2);
     ctx.arc(6, -5, 1.5, 0, Math.PI * 2);
     ctx.arc(-2, -6, 1, 0, Math.PI * 2);
     ctx.arc(2, -6, 1, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Fangs
+
     ctx.fillStyle = '#330000';
     ctx.beginPath();
     ctx.moveTo(-3, -2);
@@ -229,8 +292,7 @@ export class Broodmother extends Enemy {
     ctx.lineTo(4, 4);
     ctx.lineTo(2, 2);
     ctx.fill();
-    
-    // Phase indicator
+
     if (this.phase === 'charging') {
       ctx.strokeStyle = '#ff0000';
       ctx.lineWidth = 1;
@@ -247,16 +309,30 @@ export class Broodmother extends Enemy {
       ctx.fill();
       ctx.globalAlpha = 1;
     }
-    
-    // Health bar
+
+    const barWidth = 44;
+    const barHeight = 5;
+    const barY = -this.size / 2 - 11;
+    const hx = -barWidth / 2;
     const healthPercent = this.health / this.maxHealth;
-    const barWidth = 40;
-    const barHeight = 4;
-    
-    ctx.fillStyle = '#333333';
-    ctx.fillRect(-barWidth / 2, -this.size / 2 - 10, barWidth, barHeight);
-    
-    ctx.fillStyle = healthPercent > 0.3 ? '#ff0000' : '#ff6600';
-    ctx.fillRect(-barWidth / 2, -this.size / 2 - 10, barWidth * healthPercent, barHeight);
+    const midX = hx + barWidth * STAGE2_THRESHOLD;
+
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(hx, barY, barWidth, barHeight);
+
+    ctx.fillStyle = 'rgba(80,40,40,0.85)';
+    ctx.fillRect(hx, barY, barWidth * STAGE2_THRESHOLD, barHeight);
+    ctx.fillStyle = 'rgba(100,35,25,0.9)';
+    ctx.fillRect(midX, barY, barWidth * (1 - STAGE2_THRESHOLD), barHeight);
+
+    ctx.fillStyle = stage === 2 ? '#ff3a18' : '#dd1111';
+    ctx.fillRect(hx, barY, barWidth * healthPercent, barHeight);
+
+    ctx.strokeStyle = '#ffee88';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(midX) + 0.5, barY - 1);
+    ctx.lineTo(Math.round(midX) + 0.5, barY + barHeight + 1);
+    ctx.stroke();
   }
 }

@@ -1,74 +1,58 @@
+'use client'
+
+import { MenuBackdrop, MenuWebSilhouette, MenuPanel, MenuBtn, MENU } from '@/components/game/menuTheme'
+
 interface PauseMenuProps {
-  onResume: () => void;
-  onRestart: () => void;
-  onMainMenu: () => void;
+  onResume: () => void
+  onRestart: () => void
+  onMainMenu: () => void
 }
+
+const mono = { fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", monospace' } as const
 
 export function PauseMenu({ onResume, onRestart, onMainMenu }: PauseMenuProps) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
-      <h2 
-        className="text-4xl font-bold mb-8"
+    <div className="absolute inset-0 flex flex-col items-center justify-center">
+      <MenuBackdrop />
+      <MenuWebSilhouette />
+      <div
+        className="pointer-events-none absolute inset-0"
         style={{
-          color: '#fff',
-          textShadow: '2px 2px 0 #000',
-          fontFamily: 'monospace',
+          background: `radial-gradient(ellipse 50% 40% at 50% 45%, transparent 0%, rgba(0,0,0,0.75) 100%)`,
         }}
-      >
-        PAUSED
-      </h2>
+      />
 
-      <div className="flex flex-col gap-3">
-        <button
-          onClick={onResume}
-          className="px-6 py-2 text-lg font-bold rounded transition-all hover:scale-105 active:scale-95"
+      <div className="relative z-10 flex flex-col items-center px-6">
+        <p className="mb-2 text-[10px] uppercase tracking-[0.5em]" style={{ color: MENU.whisper, ...mono }}>
+          Bit
+        </p>
+        <h2
+          className="mb-8 text-2xl font-bold uppercase tracking-[0.35em] sm:text-3xl"
           style={{
-            backgroundColor: '#2d4a0e',
-            color: '#fff',
-            border: '2px solid #4a7a1a',
-            fontFamily: 'monospace',
+            color: MENU.boneDim,
+            ...mono,
+            textShadow: '0 0 24px rgba(80, 30, 30, 0.4), 0 2px 0 #000',
           }}
         >
-          RESUME
-        </button>
+          Still
+        </h2>
 
-        <button
-          onClick={onRestart}
-          className="px-6 py-2 text-lg font-bold rounded transition-all hover:scale-105 active:scale-95"
-          style={{
-            backgroundColor: '#4a4a0e',
-            color: '#fff',
-            border: '2px solid #7a7a1a',
-            fontFamily: 'monospace',
-          }}
-        >
-          RESTART
-        </button>
+        <MenuPanel className="flex w-[min(100%,280px)] flex-col gap-3 py-6">
+          <MenuBtn variant="primary" onClick={onResume} className="w-full py-3.5">
+            Resume
+          </MenuBtn>
+          <MenuBtn variant="secondary" onClick={onRestart} className="w-full py-3.5">
+            Restart run
+          </MenuBtn>
+          <MenuBtn variant="danger" onClick={onMainMenu} className="w-full py-3.5">
+            Flee to title
+          </MenuBtn>
+        </MenuPanel>
 
-        <button
-          onClick={onMainMenu}
-          className="px-6 py-2 text-lg font-bold rounded transition-all hover:scale-105 active:scale-95"
-          style={{
-            backgroundColor: '#4a0e0e',
-            color: '#fff',
-            border: '2px solid #8b0000',
-            fontFamily: 'monospace',
-          }}
-        >
-          MAIN MENU
-        </button>
+        <p className="mt-8 text-center text-[10px] uppercase tracking-[0.25em]" style={{ color: MENU.whisper, ...mono }}>
+          Esc — resume
+        </p>
       </div>
-
-      <p 
-        className="mt-6"
-        style={{
-          color: '#666',
-          fontFamily: 'monospace',
-          fontSize: '14px',
-        }}
-      >
-        Press ESC to resume
-      </p>
     </div>
-  );
+  )
 }

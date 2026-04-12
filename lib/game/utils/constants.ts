@@ -32,6 +32,10 @@ export const DIFFICULTY_SETTINGS: Record<
     enemyDamageMult: number;
     /** Multiplies enemy move speed after spawn (chase, kite, wander). */
     enemySpeedMult: number;
+    /** Extra multiplier on Broodmother HP (stacks with enemyHealthMult). */
+    bossHealthMult: number;
+    /** Extra multiplier on Broodmother damage (stacks with enemyDamageMult). */
+    bossDamageMult: number;
     /** Multiplies seconds-between-shots; lower = faster shooting for the player. */
     playerFireRateMult: number;
     spawnProtectionSec: number;
@@ -41,6 +45,8 @@ export const DIFFICULTY_SETTINGS: Record<
     enemyHealthMult: 0.82,
     enemyDamageMult: 0.78,
     enemySpeedMult: 1,
+    bossHealthMult: 0.72,
+    bossDamageMult: 0.8,
     playerFireRateMult: 0.88,
     spawnProtectionSec: 3.0,
   },
@@ -48,6 +54,8 @@ export const DIFFICULTY_SETTINGS: Record<
     enemyHealthMult: 1,
     enemyDamageMult: 1,
     enemySpeedMult: 1,
+    bossHealthMult: 1,
+    bossDamageMult: 1,
     playerFireRateMult: 1,
     spawnProtectionSec: 2.45,
   },
@@ -55,6 +63,8 @@ export const DIFFICULTY_SETTINGS: Record<
     enemyHealthMult: 1.28,
     enemyDamageMult: 1.25,
     enemySpeedMult: 1.09,
+    bossHealthMult: 1.42,
+    bossDamageMult: 1.18,
     playerFireRateMult: 1.12,
     spawnProtectionSec: 1.85,
   },
@@ -149,8 +159,8 @@ export const ENEMY = {
   },
   BROODMOTHER: {
     size: 32,
-    speed: 20,
-    health: 52,
+    speed: 22,
+    health: 88,
     damage: 2,
     spawnCooldown: 4.0,
   },

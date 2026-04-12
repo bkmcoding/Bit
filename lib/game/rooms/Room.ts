@@ -196,6 +196,8 @@ export class Room {
 
     this.renderFloorVariation(ctx, w, h, wt, pal);
 
+    this.renderAmbientDecor(ctx, w, h, wt, pal);
+
     this.renderObstacles(ctx, pal);
 
     ctx.fillStyle = pal.wall;
@@ -304,6 +306,217 @@ export class Room {
         ctx.fillRect(bounds.x, bounds.y + bounds.height, bounds.width, 2);
       }
     }
+  }
+
+  /** Deterministic 0–1 for decor placement from room id. */
+  private decorRand(k: number): number {
+    const x = Math.sin(this.id * 12.9898 + k * 78.233 + this.themeId.length * 2.91) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  /**
+   * Floor and wall-adjacent grime: vines, moss, mold, water stains, rust — theme-weighted.
+   */
+  private renderAmbientDecor(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    wt: number,
+    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+  ): void {
+    const innerW = w - wt * 2;
+    const innerH = h - wt * 2;
+    ctx.save();
+
+    const drawMoldBlob = (cx: number, cy: number, rw: number, rh: number, rot: number, fill: string) => {
+      ctx.fillStyle = fill;
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rw, rh, rot, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.22;
+      ctx.beginPath();
+      ctx.ellipse(cx + 2, cy - 1, rw * 0.45, rh * 0.5, rot + 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    };
+
+    const drawWaterPuddle = (cx: number, cy: number, rw: number, rh: number, alpha: number) => {
+      ctx.fillStyle = `rgba(38,52,68,${alpha})`;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rw, rh, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(55,72,92,${alpha * 0.55})`;
+      ctx.beginPath();
+      ctx.ellipse(cx - 2, cy + 1, rw * 0.55, rh * 0.45, -0.2, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    const drawRustStreak = (x0: number, y0: number, len: number, vertical: boolean) => {
+      ctx.strokeStyle = 'rgba(110,55,28,0.55)';
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.65;
+      ctx.beginPath();
+      if (vertical) {
+        ctx.moveTo(x0, y0);
+        for (let t = 0; t <= 6; t++) {
+          const yy = y0 + (len * t) / 6;
+          const xx = x0 + Math.sin(t * 1.2 + this.id) * 1.2;
+          ctx.lineTo(xx, yy);
+        }
+      } else {
+        ctx.moveTo(x0, y0);
+        for (let t = 0; t <= 6; t++) {
+          const xx = x0 + (len * t) / 6;
+          const yy = y0 + Math.cos(t * 1.1) * 1;
+          ctx.lineTo(xx, yy);
+        }
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    };
+
+    const drawVineColumn = (x: number, y0: number, y1: number, phase: number, col: string) => {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.55;
+      let y = y0;
+      let px = x;
+      while (y < y1) {
+        const ny = Math.min(y + 5 + (this.decorRand(Math.floor(y)) * 3) | 0, y1);
+        const nx = x + Math.sin(y * 0.11 + phase) * 2.5;
+        ctx.beginPath();
+        ctx.moveTo(px, y);
+        ctx.lineTo(nx, ny);
+        ctx.stroke();
+        px = nx;
+        y = ny;
+      }
+      ctx.globalAlpha = 0.35;
+      for (let k = 0; k < 3; k++) {
+        const ly = y0 + this.decorRand(30 + k) * (y1 - y0);
+        ctx.beginPath();
+        ctx.arc(x + Math.sin(ly * 0.09) * 2, ly, 2 + k, 0, Math.PI * 2);
+        ctx.fillStyle = col;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    // Theme-specific layers
+    switch (this.themeId) {
+      case 'moss': {
+        drawVineColumn(wt + 2, wt + 4, h - wt - 4, 0, '#2a4a32');
+        drawVineColumn(wt + 5, wt + 10, h - wt - 12, 1.2, '#1f3a28');
+        drawVineColumn(w - wt - 3, wt + 6, h - wt - 8, 2.1, '#2d5234');
+        for (let i = 0; i < 6; i++) {
+          const mx = wt + 8 + this.decorRand(i) * (innerW - 16);
+          const my = wt + 6 + this.decorRand(i + 50) * (innerH - 12);
+          drawMoldBlob(mx, my, 5 + this.decorRand(i + 2) * 6, 4 + this.decorRand(i + 3) * 4, this.decorRand(i + 4) * 0.5, '#1c3020');
+        }
+        drawWaterPuddle(
+          wt + innerW * 0.72,
+          h - wt - innerH * 0.22,
+          10 + this.decorRand(7) * 8,
+          6 + this.decorRand(8) * 4,
+          0.28
+        );
+        break;
+      }
+      case 'cellar': {
+        for (let i = 0; i < 8; i++) {
+          const mx = wt + 6 + this.decorRand(i * 3) * (innerW - 12);
+          const my = wt + 8 + this.decorRand(i * 3 + 1) * (innerH - 16);
+          drawMoldBlob(mx, my, 4 + this.decorRand(i + 9) * 5, 3 + this.decorRand(i + 10) * 5, 0.2 * i, '#141210');
+        }
+        drawWaterPuddle(wt + innerW * 0.2, h - wt - 14, 14, 8, 0.32);
+        drawWaterPuddle(w - wt - 26, wt + innerH * 0.35, 9, 6, 0.22);
+        drawVineColumn(wt + 1, wt + 18, h - wt - 20, 0.5, '#2a3020');
+        break;
+      }
+      case 'ash': {
+        ctx.fillStyle = 'rgba(55,52,48,0.4)';
+        for (let i = 0; i < 5; i++) {
+          const sx = wt + this.decorRand(i + 11) * innerW;
+          const sy = wt + this.decorRand(i + 22) * innerH;
+          ctx.beginPath();
+          ctx.ellipse(sx, sy, 8 + i * 2, 5, this.decorRand(i) * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        for (let i = 0; i < 4; i++) {
+          drawMoldBlob(
+            wt + 10 + this.decorRand(i + 40) * (innerW - 20),
+            wt + 10 + this.decorRand(i + 41) * (innerH - 20),
+            5,
+            4,
+            0.3,
+            '#1c1a18'
+          );
+        }
+        drawRustStreak(w - wt - 2, wt + 12, innerH - 24, true);
+        break;
+      }
+      case 'deep': {
+        for (let i = 0; i < 7; i++) {
+          drawMoldBlob(
+            wt + 4 + this.decorRand(i + 60) * (innerW - 8),
+            wt + 4 + this.decorRand(i + 61) * (innerH - 8),
+            5 + this.decorRand(i + 62) * 7,
+            4 + this.decorRand(i + 63) * 5,
+            this.decorRand(i) * 0.8,
+            '#120c18'
+          );
+        }
+        drawWaterPuddle(w / 2 - 6, h - wt - 20, 18, 10, 0.38);
+        drawWaterPuddle(wt + 16, wt + innerH * 0.55, 12, 7, 0.26);
+        drawVineColumn(w - wt - 2, wt + 4, h - wt - 6, 0.8, '#1a1422');
+        drawVineColumn(wt + 3, wt + 8, h * 0.55, 1.4, '#161020');
+        break;
+      }
+      case 'rust': {
+        for (let s = 0; s < 5; s++) {
+          drawRustStreak(wt + 3 + s * 4, wt + 10 + s * 13, innerH - 20, true);
+        }
+        drawRustStreak(wt + 20, h - wt - 4, innerW - 40, false);
+        ctx.fillStyle = 'rgba(90,42,22,0.28)';
+        for (let i = 0; i < 6; i++) {
+          const rx = wt + this.decorRand(i + 80) * innerW;
+          const ry = wt + this.decorRand(i + 81) * innerH;
+          ctx.beginPath();
+          ctx.ellipse(rx, ry, 7, 5, this.decorRand(i) * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        drawWaterPuddle(w - wt - 30, h - wt - 18, 11, 7, 0.2);
+        drawMoldBlob(wt + innerW * 0.45, wt + 12, 6, 5, 0.1, '#1a1410');
+        break;
+      }
+    }
+
+    if (this.isBossRoom) {
+      drawWaterPuddle(w * 0.35, h - wt - 14, 22, 11, 0.34);
+      drawWaterPuddle(w * 0.62, wt + 18, 16, 9, 0.28);
+      drawMoldBlob(w / 2, h / 2 + 8, 14, 10, 0.2, '#0c080e');
+      drawRustStreak(wt + 1, wt + 6, innerH - 10, true);
+    }
+
+    // Light corner mold on all themes
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = this.themeId === 'moss' ? '#1a2820' : '#141210';
+    const corners = [
+      [wt + 6, wt + 6],
+      [w - wt - 10, wt + 6],
+      [wt + 8, h - wt - 10],
+      [w - wt - 12, h - wt - 12],
+    ] as const;
+    for (let c = 0; c < corners.length; c++) {
+      const [cx, cy] = corners[c];
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5 + (c % 2), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
   }
 
   private renderCornerWebs(

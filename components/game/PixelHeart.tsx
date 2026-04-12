@@ -22,8 +22,8 @@ export function PixelHeart({ filled }: { filled: boolean }) {
       style={{
         imageRendering: 'pixelated',
         filter: filled
-          ? 'drop-shadow(1px 0 0 #000) drop-shadow(-1px 0 0 #000) drop-shadow(0 1px 0 #000) drop-shadow(0 -1px 0 #000)'
-          : 'drop-shadow(1px 0 0 #0a0808) drop-shadow(-1px 0 0 #0a0808) drop-shadow(0 1px 0 #0a0808) drop-shadow(0 -1px 0 #0a0808)',
+          ? 'drop-shadow(1px 0 0 #0c0808) drop-shadow(-1px 0 0 #0c0808) drop-shadow(0 1px 0 #0c0808) drop-shadow(0 -1px 0 #0c0808)'
+          : 'drop-shadow(1px 0 0 #060404) drop-shadow(-1px 0 0 #060404) drop-shadow(0 1px 0 #060404) drop-shadow(0 -1px 0 #060404)',
       }}
       aria-hidden
     >
@@ -37,7 +37,7 @@ export function PixelHeart({ filled }: { filled: boolean }) {
               y={y}
               width={1}
               height={1}
-              fill={filled ? '#c01818' : '#2a2228'}
+              fill={filled ? '#5a2428' : '#1c181a'}
             />
           );
         })
