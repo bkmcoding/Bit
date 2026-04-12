@@ -1,6 +1,7 @@
 import { Entity } from '../Entity';
 import { Vector2 } from '../../utils/Vector2';
 import { COLLISION_LAYER, COLORS, GAME } from '../../utils/constants';
+import { resolveCircleObstacles } from '../../utils/obstacleCollision';
 import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
 
@@ -55,6 +56,12 @@ export abstract class Enemy extends Entity {
       
       this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
       this.position.y = Math.max(minY, Math.min(maxY, this.position.y));
+      const obs = room.getObstacleRects();
+      if (obs.length > 0) {
+        resolveCircleObstacles(this.position, halfSize, obs);
+        this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
+        this.position.y = Math.max(minY, Math.min(maxY, this.position.y));
+      }
     }
     
     // Subclass-specific behavior
@@ -85,6 +92,7 @@ export abstract class Enemy extends Entity {
     // Death particles
     this.game.particles.emitDeath(this.position, '#ff4444');
     this.game.shake(3);
+    this.game.onEnemyKilled();
     this.destroy();
   }
 

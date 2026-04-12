@@ -2,6 +2,7 @@ import type { Game } from '../engine/Game';
 import type { Entity } from '../entities/Entity';
 import { Projectile } from '../entities/Projectile';
 import { Enemy } from '../entities/enemies/Enemy';
+import { circleOverlapsObstacle } from '../utils/obstacleCollision';
 
 export class CollisionSystem {
   private game: Game;
@@ -11,6 +12,20 @@ export class CollisionSystem {
   }
 
   update(): void {
+    const room = this.game.getCurrentRoom();
+    const obstacles = room?.getObstacleRects() ?? [];
+
+    for (const projectile of this.game.projectiles) {
+      if (!projectile.isActive) continue;
+      const r = projectile.size / 2;
+      for (const o of obstacles) {
+        if (circleOverlapsObstacle(projectile.position.x, projectile.position.y, r, [o])) {
+          projectile.destroy();
+          break;
+        }
+      }
+    }
+
     // Player projectiles vs enemies
     for (const projectile of this.game.projectiles) {
       if (!projectile.isActive || !projectile.isPlayerProjectile) continue;
@@ -20,7 +35,8 @@ export class CollisionSystem {
         if (projectile.hasHit(enemy.id)) continue;
         
         if (this.checkCollision(projectile, enemy)) {
-          enemy.takeDamage(projectile.damage);
+          const dmg = this.game.player.rollProjectileDamage(projectile.damage);
+          enemy.takeDamage(dmg);
           projectile.registerHit(enemy.id);
         }
       }
@@ -31,7 +47,9 @@ export class CollisionSystem {
       if (!projectile.isActive || projectile.isPlayerProjectile) continue;
       
       if (this.checkCollision(projectile, this.game.player)) {
-        this.game.player.takeDamage(projectile.damage);
+        if (!this.game.player.isSpawnProtected()) {
+          this.game.player.takeDamage(projectile.damage);
+        }
         projectile.destroy();
       }
     }

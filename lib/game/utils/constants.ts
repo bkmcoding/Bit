@@ -12,13 +12,48 @@ export const GAME = {
 export const PLAYER = {
   SIZE: 8,
   SPEED: 60, // pixels per second
-  FIRE_RATE: 0.3, // seconds between shots
+  FIRE_RATE: 0.58, // seconds between shots (higher = slower; tuned vs enemy HP)
   DAMAGE: 1,
   MAX_HEALTH: 3,
   INVULN_TIME: 1.0, // seconds of invincibility after hit
   ACCELERATION: 400, // how fast player reaches max speed
   FRICTION: 10, // how fast player slows down
 } as const;
+
+/** Selected from main menu; scales enemies, player fire cadence, and spawn safety. */
+export type Difficulty = 'easy' | 'medium' | 'hard';
+
+export const DIFFICULTY_DEFAULT: Difficulty = 'medium';
+
+export const DIFFICULTY_SETTINGS: Record<
+  Difficulty,
+  {
+    enemyHealthMult: number;
+    enemyDamageMult: number;
+    /** Multiplies seconds-between-shots; lower = faster shooting for the player. */
+    playerFireRateMult: number;
+    spawnProtectionSec: number;
+  }
+> = {
+  easy: {
+    enemyHealthMult: 0.82,
+    enemyDamageMult: 0.78,
+    playerFireRateMult: 0.88,
+    spawnProtectionSec: 3.0,
+  },
+  medium: {
+    enemyHealthMult: 1,
+    enemyDamageMult: 1,
+    playerFireRateMult: 1,
+    spawnProtectionSec: 2.45,
+  },
+  hard: {
+    enemyHealthMult: 1.22,
+    enemyDamageMult: 1.22,
+    playerFireRateMult: 1.12,
+    spawnProtectionSec: 1.85,
+  },
+};
 
 // Projectile settings
 export const PROJECTILE = {
@@ -28,44 +63,70 @@ export const PROJECTILE = {
   LIFETIME: 3, // seconds before despawn
 } as const;
 
-// Enemy configurations
+// Enemy configurations (health tuned for slower player fire rate and longer runs)
 export const ENEMY = {
-  SPIDER: { 
-    size: 10, 
-    speed: 40, 
-    health: 2, 
+  SPIDER: {
+    size: 10,
+    speed: 38,
+    health: 7,
     damage: 1,
     chaseRange: 80,
   },
-  SPITTER: { 
-    size: 12, 
-    speed: 20, 
-    health: 3, 
-    damage: 1, 
+  SPITTER: {
+    size: 12,
+    speed: 20,
+    health: 10,
+    damage: 1,
     range: 100,
-    fireRate: 2.0,
+    fireRate: 1.75,
     preferredDistance: 60,
   },
-  DASHER: { 
-    size: 8, 
+  DASHER: {
+    size: 8,
     speed: 30,
-    dashSpeed: 150, 
-    health: 2, 
-    damage: 1, 
-    chargeTime: 1.5,
-    dashDuration: 0.3,
+    dashSpeed: 150,
+    health: 9,
+    damage: 1,
+    chargeTime: 1.45,
+    dashDuration: 0.28,
   },
-  WEBSPINNER: { 
-    size: 14, 
-    speed: 15, 
-    health: 4, 
+  WEBSPINNER: {
+    size: 14,
+    speed: 15,
+    health: 12,
     damage: 1,
     webCooldown: 3.0,
+  },
+  BRUTE: {
+    size: 18,
+    speed: 22,
+    health: 22,
+    damage: 2,
+    chaseRange: 130,
+  },
+  SKITTER: {
+    size: 7,
+    speed: 56,
+    health: 5,
+    damage: 1,
+    chaseRange: 125,
+  },
+  WIDOW: {
+    size: 11,
+    speed: 19,
+    health: 14,
+    damage: 1,
+    range: 105,
+    preferredDistance: 72,
+    burstCount: 3,
+    burstSpacing: 0.2,
+    burstCooldown: 2.65,
+    projectileSpeed: 76,
   },
   BROODMOTHER: {
     size: 32,
     speed: 20,
-    health: 15,
+    health: 52,
     damage: 2,
     spawnCooldown: 4.0,
   },
@@ -80,14 +141,72 @@ export const ROOM = {
   DOOR_HEIGHT: 8,
 } as const;
 
+/** Minimum spawn shield on any combat room entry (seconds); difficulty can add more on top. */
+export const SPAWN_PROTECTION_MIN_SEC = 2.85;
+
+export type RoomThemeId = 'cellar' | 'moss' | 'ash' | 'deep' | 'rust';
+
+export const ROOM_THEME_PALETTES: Record<
+  RoomThemeId,
+  {
+    floor: string;
+    floorAccent: string;
+    wall: string;
+    wallDark: string;
+    obstacle: string;
+    obstacleTop: string;
+  }
+> = {
+  cellar: {
+    floor: '#2a1e16',
+    floorAccent: '#35261c',
+    wall: '#443028',
+    wallDark: '#1c1410',
+    obstacle: '#35261c',
+    obstacleTop: '#4a3828',
+  },
+  moss: {
+    floor: '#1e2820',
+    floorAccent: '#263228',
+    wall: '#384238',
+    wallDark: '#121810',
+    obstacle: '#2d3a2e',
+    obstacleTop: '#3d4a3e',
+  },
+  ash: {
+    floor: '#282420',
+    floorAccent: '#302c26',
+    wall: '#454038',
+    wallDark: '#181610',
+    obstacle: '#383228',
+    obstacleTop: '#4a4238',
+  },
+  deep: {
+    floor: '#181420',
+    floorAccent: '#221c2a',
+    wall: '#342e3a',
+    wallDark: '#0e0c12',
+    obstacle: '#282030',
+    obstacleTop: '#383044',
+  },
+  rust: {
+    floor: '#2e1e18',
+    floorAccent: '#38241c',
+    wall: '#523428',
+    wallDark: '#201410',
+    obstacle: '#442c20',
+    obstacleTop: '#5a3828',
+  },
+};
+
 // Colors (limited palette for pixel art look)
 export const COLORS = {
   // Background & walls
-  FLOOR: '#3d2b1f',
-  WALL: '#5c4033',
-  WALL_DARK: '#2a1f14',
-  DOOR_CLOSED: '#8b0000',
-  DOOR_OPEN: '#1a1a1a',
+  FLOOR: '#2a1e16',
+  WALL: '#443028',
+  WALL_DARK: '#1c1410',
+  DOOR_CLOSED: '#5a0808',
+  DOOR_OPEN: '#0a0a0c',
   
   // Player
   PLAYER_BODY: '#ffffff',
@@ -102,9 +221,20 @@ export const COLORS = {
   DASHER_BODY: '#4a0e4a',
   WEBSPINNER_BODY: '#3d3d3d',
   BROODMOTHER_BODY: '#1a0505',
+  BRUTE_BODY: '#3d2818',
+  BRUTE_SHELL: '#5c3d22',
+  BRUTE_LEGS: '#1f140c',
+  SKITTER_BODY: '#5c1818',
+  SKITTER_ABDOMEN: '#3d1010',
+  SKITTER_LEGS: '#2a0a0a',
+  SKITTER_EYES: '#ffaa00',
+  WIDOW_BODY: '#1a0a28',
+  WIDOW_ABDOMEN: '#2a1040',
+  WIDOW_LEGS: '#0d0514',
+  WIDOW_EYES: '#cc00ff',
   
   // Projectiles
-  PLAYER_BULLET: '#00ffff',
+  PLAYER_BULLET: '#5a3038',
   ENEMY_BULLET: '#88ff00',
   
   // Effects
@@ -129,6 +259,7 @@ export const COLLISION_LAYER = {
   WALL: 1 << 4,
   DOOR: 1 << 5,
   WEB: 1 << 6,
+  OBSTACLE: 1 << 7,
 } as const;
 
 // Game states

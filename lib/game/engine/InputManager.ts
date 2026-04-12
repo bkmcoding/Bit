@@ -133,19 +133,22 @@ export class InputManager {
     return this.mousePosition.clone();
   }
 
-  // Movement helper - returns normalized direction based on WASD
+  // Movement helper — opposing keys on an axis cancel (no net horizontal/vertical).
   getMovementDirection(): Vector2 {
     const dir = new Vector2();
-    
-    if (this.isKeyDown('w') || this.isKeyDown('arrowup')) dir.y -= 1;
-    if (this.isKeyDown('s') || this.isKeyDown('arrowdown')) dir.y += 1;
-    if (this.isKeyDown('a') || this.isKeyDown('arrowleft')) dir.x -= 1;
-    if (this.isKeyDown('d') || this.isKeyDown('arrowright')) dir.x += 1;
-    
+
+    const up = this.isKeyDown('w') || this.isKeyDown('arrowup');
+    const down = this.isKeyDown('s') || this.isKeyDown('arrowdown');
+    const left = this.isKeyDown('a') || this.isKeyDown('arrowleft');
+    const right = this.isKeyDown('d') || this.isKeyDown('arrowright');
+
+    if (up !== down) dir.y += down ? 1 : -1;
+    if (left !== right) dir.x += right ? 1 : -1;
+
     if (dir.magnitudeSq() > 0) {
       dir.normalizeMut();
     }
-    
+
     return dir;
   }
 

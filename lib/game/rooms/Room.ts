@@ -1,9 +1,26 @@
 import { Vector2 } from '../utils/Vector2';
-import { ROOM, COLORS, GAME, PLAYER, type Direction } from '../utils/constants';
+import {
+  ROOM,
+  COLORS,
+  GAME,
+  PLAYER,
+  ROOM_THEME_PALETTES,
+  type Direction,
+  type RoomThemeId,
+} from '../utils/constants';
+import type { ObstacleRect } from '../utils/obstacleCollision';
 
 export interface SpawnPoint {
   position: Vector2;
-  enemyType: 'spider' | 'spitter' | 'dasher' | 'webspinner' | 'broodmother';
+  enemyType:
+    | 'spider'
+    | 'spitter'
+    | 'dasher'
+    | 'webspinner'
+    | 'brute'
+    | 'skitter'
+    | 'widow'
+    | 'broodmother';
 }
 
 export interface Door {
@@ -12,11 +29,22 @@ export interface Door {
   targetRoom: number;
 }
 
+export interface RoomObstacleConfig {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface RoomConfig {
   id: number;
   doors: Direction[];
   spawns: SpawnPoint[];
   isBossRoom?: boolean;
+  /** Visual + collision palette */
+  theme?: RoomThemeId;
+  /** Interior crates / pillars (native coords, inside walls). */
+  obstacles?: RoomObstacleConfig[];
 }
 
 export class Room {
@@ -26,11 +54,15 @@ export class Room {
   public wallThickness: number = ROOM.WALL_THICKNESS;
   public isCleared: boolean = false;
   public isBossRoom: boolean;
+  public themeId: RoomThemeId;
+  public obstacles: ObstacleRect[];
 
   constructor(config: RoomConfig) {
     this.id = config.id;
     this.spawns = config.spawns;
     this.isBossRoom = config.isBossRoom ?? false;
+    this.themeId = config.theme ?? 'cellar';
+    this.obstacles = (config.obstacles ?? []).map((o) => ({ x: o.x, y: o.y, w: o.w, h: o.h }));
     
     // Initialize doors
     for (const dir of config.doors) {
@@ -90,6 +122,10 @@ export class Room {
       case 'WEST':
         return { x: 0, y: (h - dh) / 2, width: wt + margin, height: dh };
     }
+  }
+
+  getObstacleRects(): ObstacleRect[] {
+    return this.obstacles;
   }
 
   getDoorAt(position: Vector2): Door | null {
@@ -153,42 +189,113 @@ export class Room {
     const w = GAME.NATIVE_WIDTH;
     const h = GAME.NATIVE_HEIGHT;
     const wt = this.wallThickness;
-    
-    // Draw walls
-    ctx.fillStyle = COLORS.WALL;
-    
-    // Top wall
+    const pal = ROOM_THEME_PALETTES[this.themeId];
+
+    ctx.fillStyle = pal.floor;
+    ctx.fillRect(0, 0, w, h);
+
+    this.renderFloorVariation(ctx, w, h, wt, pal);
+
+    this.renderObstacles(ctx, pal);
+
+    ctx.fillStyle = pal.wall;
+
     ctx.fillRect(0, 0, w, wt);
-    // Bottom wall
     ctx.fillRect(0, h - wt, w, wt);
-    // Left wall
     ctx.fillRect(0, 0, wt, h);
-    // Right wall
     ctx.fillRect(w - wt, 0, wt, h);
-    
-    // Wall inner shadow
-    ctx.fillStyle = COLORS.WALL_DARK;
+
+    ctx.fillStyle = pal.wallDark;
     ctx.fillRect(wt, wt, w - wt * 2, 2);
     ctx.fillRect(wt, wt, 2, h - wt * 2);
-    
-    // Draw doors
+
     for (const [direction, door] of this.doors) {
-      this.renderDoor(ctx, direction, door.isOpen);
+      this.renderDoor(ctx, direction, door.isOpen, pal);
     }
-    
-    // Draw corner decorations (cobwebs)
-    this.renderCornerWebs(ctx);
+
+    this.renderCornerWebs(ctx, pal);
   }
 
-  private renderDoor(ctx: CanvasRenderingContext2D, direction: Direction, isOpen: boolean): void {
+  private renderFloorVariation(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    wt: number,
+    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+  ): void {
+    const innerW = w - wt * 2;
+    const innerH = h - wt * 2;
+    ctx.save();
+    ctx.strokeStyle = pal.floorAccent;
+    ctx.globalAlpha = 0.22;
+    ctx.lineWidth = 0.5;
+
+    const seed = this.id * 17;
+    const step = 20 + (seed % 8);
+    for (let x = wt; x < w - wt; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, wt);
+      ctx.lineTo(x, h - wt);
+      ctx.stroke();
+    }
+    for (let y = wt; y < h - wt; y += step) {
+      ctx.beginPath();
+      ctx.moveTo(wt, y);
+      ctx.lineTo(w - wt, y);
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 0.18;
+    for (let i = 0; i < 3; i++) {
+      const ox = wt + ((seed + i * 41) % Math.max(1, innerW - 24));
+      const oy = wt + ((seed + i * 59) % Math.max(1, innerH - 24));
+      ctx.fillStyle = pal.floorAccent;
+      ctx.fillRect(ox, oy, 10 + (i % 3) * 4, 8);
+    }
+
+    ctx.globalAlpha = 0.14;
+    for (let s = 0; s < 5; s++) {
+      const sx = wt + ((seed + s * 73) % Math.max(8, innerW - 20));
+      const sy = wt + ((seed + s * 91) % Math.max(8, innerH - 16));
+      const rw = 14 + (s % 3) * 6;
+      const rh = 10 + (s % 2) * 5;
+      ctx.fillStyle = '#1a0808';
+      ctx.beginPath();
+      ctx.ellipse(sx, sy, rw * 0.5, rh * 0.5, 0.3 + s * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  private renderObstacles(
+    ctx: CanvasRenderingContext2D,
+    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+  ): void {
+    for (const o of this.obstacles) {
+      ctx.fillStyle = pal.obstacle;
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+      ctx.fillStyle = pal.obstacleTop;
+      ctx.fillRect(o.x, o.y, o.w, 2);
+      ctx.strokeStyle = pal.wallDark;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(o.x + 0.5, o.y + 0.5, o.w - 1, o.h - 1);
+    }
+  }
+
+  private renderDoor(
+    ctx: CanvasRenderingContext2D,
+    direction: Direction,
+    isOpen: boolean,
+    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+  ): void {
     const bounds = this.getDoorBounds(direction);
-    
+
     ctx.fillStyle = isOpen ? COLORS.DOOR_OPEN : COLORS.DOOR_CLOSED;
     ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
     
     // Door frame
     if (isOpen) {
-      ctx.fillStyle = COLORS.WALL_DARK;
+      ctx.fillStyle = pal.wallDark;
       if (direction === 'NORTH' || direction === 'SOUTH') {
         ctx.fillRect(bounds.x - 2, bounds.y, 2, bounds.height);
         ctx.fillRect(bounds.x + bounds.width, bounds.y, 2, bounds.height);
@@ -199,10 +306,13 @@ export class Room {
     }
   }
 
-  private renderCornerWebs(ctx: CanvasRenderingContext2D): void {
-    ctx.strokeStyle = COLORS.WEB;
+  private renderCornerWebs(
+    ctx: CanvasRenderingContext2D,
+    _pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+  ): void {
+    ctx.strokeStyle = 'rgba(120, 110, 118, 0.55)';
     ctx.lineWidth = 0.5;
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.48;
     
     const wt = this.wallThickness;
     const webSize = 12;

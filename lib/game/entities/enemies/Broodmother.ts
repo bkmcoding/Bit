@@ -3,6 +3,7 @@ import { Spider } from './Spider';
 import { Projectile } from '../Projectile';
 import { Vector2 } from '../../utils/Vector2';
 import { ENEMY, COLORS, GAME } from '../../utils/constants';
+import { resolveCircleObstacles } from '../../utils/obstacleCollision';
 import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
 
@@ -15,7 +16,7 @@ export class Broodmother extends Enemy {
   private shootCooldown: number = 0;
   private legAnimation: number = 0;
   private spawnedChildren: number = 0;
-  private maxChildren: number = 4;
+  private maxChildren: number = 5;
 
   constructor(position: Vector2, game: Game) {
     super(position, ENEMY.BROODMOTHER, game);
@@ -48,7 +49,7 @@ export class Broodmother extends Enemy {
         this.spawnCooldown -= deltaTime;
         if (this.spawnCooldown <= 0 && currentChildren < this.maxChildren) {
           this.spawnChild();
-          this.spawnCooldown = 0.8;
+          this.spawnCooldown = 0.72;
           this.spawnedChildren++;
         }
         break;
@@ -58,7 +59,7 @@ export class Broodmother extends Enemy {
         this.shootCooldown -= deltaTime;
         if (this.shootCooldown <= 0) {
           this.shootSpread();
-          this.shootCooldown = 0.6;
+          this.shootCooldown = 0.52;
         }
         break;
         
@@ -79,6 +80,12 @@ export class Broodmother extends Enemy {
       
       this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
       this.position.y = Math.max(minY, Math.min(maxY, this.position.y));
+      const obs = room.getObstacleRects();
+      if (obs.length > 0) {
+        resolveCircleObstacles(this.position, halfSize, obs);
+        this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
+        this.position.y = Math.max(minY, Math.min(maxY, this.position.y));
+      }
     }
   }
 

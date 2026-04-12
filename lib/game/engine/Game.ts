@@ -6,8 +6,18 @@ import { Enemy } from '../entities/enemies/Enemy';
 import { Room } from '../rooms/Room';
 import { RoomManager } from '../systems/RoomManager';
 import { CollisionSystem } from '../systems/CollisionSystem';
-import { GAME, COLORS, type GameState } from '../utils/constants';
+import {
+  GAME,
+  COLORS,
+  PLAYER,
+  DIFFICULTY_DEFAULT,
+  DIFFICULTY_SETTINGS,
+  ROOM_THEME_PALETTES,
+  type GameState,
+  type Difficulty,
+} from '../utils/constants';
 import { Vector2 } from '../utils/Vector2';
+import { resolveCircleObstacles } from '../utils/obstacleCollision';
 import { ParticleSystem } from '../rendering/particles';
 import { AudioManager } from '../audio/AudioManager';
 import type { Upgrade } from '../upgrades/Upgrade';
@@ -22,6 +32,7 @@ export interface GameCallbacks {
 
 export class Game {
   public state: GameState = 'MENU';
+  public difficulty: Difficulty = DIFFICULTY_DEFAULT;
   public player: Player;
   public entities: Entity[] = [];
   public projectiles: Projectile[] = [];
@@ -40,6 +51,10 @@ export class Game {
   // Screen shake
   private shakeIntensity: number = 0;
   private shakeDecay: number = 0.9;
+
+  /** Drives low-HP pulse and subtle flicker in the post overlay. */
+  private ambiencePhase: number = 0;
+  private skitterCooldown: number = 0;
 
   constructor(ctx: CanvasRenderingContext2D, callbacks: GameCallbacks = {}) {
     this.ctx = ctx;
@@ -66,7 +81,11 @@ export class Game {
     this.stop();
   }
 
-  start(): void {
+  start(selectedDifficulty?: Difficulty): void {
+    if (selectedDifficulty !== undefined) {
+      this.difficulty = selectedDifficulty;
+    }
+    this.prepareNewRun();
     this.state = 'PLAYING';
     this.callbacks.onStateChange?.(this.state);
     this.roomManager.loadRoom(0);
@@ -82,23 +101,31 @@ export class Game {
   }
 
   restart(): void {
-    // Reset game state
+    this.prepareNewRun();
+    this.state = 'PLAYING';
+    this.callbacks.onStateChange?.(this.state);
+    this.roomManager.loadRoom(0);
+    this.lastTime = performance.now();
+    this.loop();
+  }
+
+  private prepareNewRun(): void {
+    this.stop();
     this.entities = [];
     this.projectiles = [];
     this.enemies = [];
     this.particles.clear();
-    
-    // Reset player
+    this.roomManager.reset();
     this.player = new Player(
       new Vector2(GAME.NATIVE_WIDTH / 2, GAME.NATIVE_HEIGHT / 2),
       this
     );
-    
-    // Reset room manager
-    this.roomManager.reset();
-    
-    // Start fresh
-    this.start();
+    this.applyDifficultyToPlayer(this.player);
+  }
+
+  private applyDifficultyToPlayer(player: Player): void {
+    const s = DIFFICULTY_SETTINGS[this.difficulty];
+    player.fireRate = PLAYER.FIRE_RATE * s.playerFireRateMult;
   }
 
   setState(newState: GameState): void {
@@ -149,6 +176,8 @@ export class Game {
       }
     }
 
+    this.applyEnemySeparation(deltaTime);
+
     // Update projectiles
     for (const projectile of this.projectiles) {
       if (projectile.isActive) {
@@ -177,11 +206,86 @@ export class Game {
     } else {
       this.shakeIntensity = 0;
     }
+
+    this.ambiencePhase += deltaTime;
+
+    this.updateEnemySkitter(deltaTime);
+  }
+
+  /** Proximity-based insect leg / chitin one-shots (optional MP3 + settings). */
+  private updateEnemySkitter(deltaTime: number): void {
+    this.skitterCooldown = Math.max(0, this.skitterCooldown - deltaTime);
+    if (this.skitterCooldown > 0) return;
+
+    let urgency = 0;
+    const px = this.player.position.x;
+    const py = this.player.position.y;
+    for (const enemy of this.enemies) {
+      if (!enemy.isActive || enemy.markedForDeletion) continue;
+      const v2 = enemy.velocity.magnitudeSq();
+      if (v2 < 64) continue;
+      const dx = enemy.position.x - px;
+      const dy = enemy.position.y - py;
+      const d = Math.hypot(dx, dy);
+      if (d > 140) continue;
+      urgency += (1 - d / 140) * Math.min(1.2, v2 / 3600);
+    }
+    if (urgency < 0.35) return;
+    if (Math.random() > 0.012 + urgency * 0.028) return;
+
+    AudioManager.playEnemySkitter(urgency);
+    this.skitterCooldown = 0.28 + Math.random() * 0.55;
   }
 
   private cleanupEntities(): void {
     this.projectiles = this.projectiles.filter(p => !p.markedForDeletion);
     this.enemies = this.enemies.filter(e => !e.markedForDeletion);
+  }
+
+  /** Light separation so enemies do not sit on the same pixel stack. */
+  private applyEnemySeparation(deltaTime: number): void {
+    const room = this.roomManager.currentRoom;
+    if (!room) return;
+    const wt = room.wallThickness;
+    const w = GAME.NATIVE_WIDTH;
+    const h = GAME.NATIVE_HEIGHT;
+    const strength = 108;
+
+    for (const enemy of this.enemies) {
+      if (!enemy.isActive || enemy.markedForDeletion) continue;
+      const push = new Vector2();
+      for (const other of this.enemies) {
+        if (other === enemy || !other.isActive || other.markedForDeletion) continue;
+        let diff = enemy.position.sub(other.position);
+        const dist = diff.magnitude();
+        const want = ((enemy.size + other.size) / 2) * 0.94;
+        if (dist > 0.02 && dist < want) {
+          const pen = (want - dist) / want;
+          diff.normalizeMut();
+          push.addMut(diff.mul(pen * strength * deltaTime));
+        } else if (dist <= 0.02) {
+          push.addMut(
+            new Vector2(Math.random() - 0.5, Math.random() - 0.5)
+              .normalize()
+              .mul(28 * deltaTime)
+          );
+        }
+      }
+      enemy.position.addMut(push);
+    }
+
+    const obs = room.getObstacleRects();
+    for (const enemy of this.enemies) {
+      if (!enemy.isActive || enemy.markedForDeletion) continue;
+      const half = enemy.size / 2;
+      enemy.position.x = Math.max(wt + half, Math.min(w - wt - half, enemy.position.x));
+      enemy.position.y = Math.max(wt + half, Math.min(h - wt - half, enemy.position.y));
+      if (obs.length > 0) {
+        resolveCircleObstacles(enemy.position, half, obs);
+        enemy.position.x = Math.max(wt + half, Math.min(w - wt - half, enemy.position.x));
+        enemy.position.y = Math.max(wt + half, Math.min(h - wt - half, enemy.position.y));
+      }
+    }
   }
 
   private render(): void {
@@ -195,8 +299,10 @@ export class Game {
       ctx.translate(shakeX, shakeY);
     }
 
-    // Clear with floor color
-    ctx.fillStyle = COLORS.FLOOR;
+    const room = this.roomManager.currentRoom;
+    ctx.fillStyle = room
+      ? ROOM_THEME_PALETTES[room.themeId].floor
+      : COLORS.FLOOR;
     ctx.fillRect(0, 0, GAME.NATIVE_WIDTH, GAME.NATIVE_HEIGHT);
 
     // Render current room
@@ -223,6 +329,90 @@ export class Game {
     this.particles.render(ctx);
 
     ctx.restore();
+
+    if (this.state !== 'MENU') {
+      this.renderHorrorOverlay(ctx);
+    }
+  }
+
+  /** Full-screen mood: cold wash, vignette, proximity dread, low-HP stress (not shaken). */
+  private renderHorrorOverlay(ctx: CanvasRenderingContext2D): void {
+    const w = GAME.NATIVE_WIDTH;
+    const h = GAME.NATIVE_HEIGHT;
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+    const maxR = Math.hypot(cx, cy);
+
+    ctx.save();
+
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = 'rgba(12, 10, 22, 0.58)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+
+    const lastRoom =
+      this.roomManager.totalRooms > 0 &&
+      this.roomManager.currentRoomIndex === this.roomManager.totalRooms - 1;
+    if (lastRoom && this.state === 'PLAYING') {
+      ctx.fillStyle = 'rgba(48, 12, 18, 0.12)';
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    let threat = 0;
+    for (const enemy of this.enemies) {
+      if (!enemy.isActive || enemy.markedForDeletion) continue;
+      const dx = enemy.position.x - this.player.position.x;
+      const dy = enemy.position.y - this.player.position.y;
+      const d = Math.hypot(dx, dy);
+      const near = 200;
+      if (d < near) threat += (near - d) / near;
+    }
+    threat = Math.min(1, threat * 0.22);
+    if (threat > 0.02) {
+      const flicker = 0.04 * Math.sin(this.ambiencePhase * 6.2) * threat;
+      ctx.fillStyle = `rgba(22, 8, 32, ${threat * 0.14 + flicker})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    const hpFrac =
+      this.player.maxHealth > 0 ? this.player.health / this.player.maxHealth : 1;
+    if (hpFrac < 0.38 && this.state === 'PLAYING') {
+      const pulse = 0.1 + 0.07 * Math.sin(this.ambiencePhase * 4.5);
+      const a = (1 - hpFrac / 0.38) * pulse;
+      ctx.fillStyle = `rgba(72, 4, 4, ${Math.min(0.38, a)})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    const g = ctx.createRadialGradient(cx, cy, maxR * 0.15, cx, cy, maxR * 1.02);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.65, 'rgba(0,0,0,0.48)');
+    g.addColorStop(1, 'rgba(0,0,0,0.9)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.fillStyle = 'rgba(8, 4, 12, 0.22)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+
+    const grain = 55 + Math.floor(25 * Math.sin(this.ambiencePhase * 2.1));
+    for (let i = 0; i < grain; i++) {
+      const gx = (Math.sin(this.ambiencePhase * 1.7 + i * 12.989) * 0.5 + 0.5) * w;
+      const gy = (Math.cos(this.ambiencePhase * 1.3 + i * 9.417) * 0.5 + 0.5) * h;
+      ctx.fillStyle = `rgba(0,0,0,${0.04 + (i % 5) * 0.02})`;
+      ctx.fillRect(Math.floor(gx), Math.floor(gy), 1, 1);
+    }
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1;
+    for (let y = 0; y < h; y += 2) {
+      ctx.beginPath();
+      ctx.moveTo(0, y + 0.5);
+      ctx.lineTo(w, y + 0.5);
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   // Check if player is touching an open door and transition
@@ -243,6 +433,10 @@ export class Game {
 
   // Add an enemy to the game
   spawnEnemy(enemy: Enemy): void {
+    const s = DIFFICULTY_SETTINGS[this.difficulty];
+    enemy.maxHealth = Math.max(1, Math.round(enemy.maxHealth * s.enemyHealthMult));
+    enemy.health = enemy.maxHealth;
+    enemy.damage = Math.max(1, Math.round(enemy.damage * s.enemyDamageMult));
     this.enemies.push(enemy);
   }
 
@@ -280,5 +474,9 @@ export class Game {
     AudioManager.play('SFX_UPGRADE');
     upgrade.apply(this.player);
     this.setState('PLAYING');
+  }
+
+  onEnemyKilled(): void {
+    this.player.onEnemyKilled();
   }
 }

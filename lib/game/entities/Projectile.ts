@@ -9,6 +9,8 @@ export interface ProjectileOptions {
   damage?: number;
   speed?: number;
   piercing?: number;
+  /** Hitbox / render diameter in pixels (default `PROJECTILE.SIZE`). */
+  size?: number;
 }
 
 export class Projectile extends Entity {
@@ -24,7 +26,7 @@ export class Projectile extends Entity {
     
     super({
       position: options.position,
-      size: PROJECTILE.SIZE,
+      size: options.size ?? PROJECTILE.SIZE,
       collisionLayer: isPlayer ? COLLISION_LAYER.PLAYER_PROJECTILE : COLLISION_LAYER.ENEMY_PROJECTILE,
       collisionMask: isPlayer 
         ? COLLISION_LAYER.ENEMY | COLLISION_LAYER.WALL

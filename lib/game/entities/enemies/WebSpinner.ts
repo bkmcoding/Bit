@@ -52,8 +52,10 @@ export class WebSpinner extends Enemy {
       // Check if player is in web
       const web = this.webs[i];
       const distToPlayer = web.position.distanceTo(this.game.player.position);
-      if (distToPlayer < web.radius + this.game.player.size / 2) {
-        // Slow player (applied in player update ideally, but we can reduce velocity here)
+      if (
+        distToPlayer < web.radius + this.game.player.size / 2 &&
+        !this.game.player.isSpawnProtected()
+      ) {
         this.game.player.velocity.mulMut(0.5);
       }
     }

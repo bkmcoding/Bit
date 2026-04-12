@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Game } from '@/lib/game/engine/Game';
-import { GAME, type GameState } from '@/lib/game/utils/constants';
+import { GAME, type GameState, type Difficulty } from '@/lib/game/utils/constants';
+import { ROOM_CONFIGS } from '@/lib/game/rooms/roomData';
 import type { Upgrade } from '@/lib/game/upgrades/Upgrade';
 import { AudioManager } from '@/lib/game/audio/AudioManager';
 import { GameUI } from './GameUI';
@@ -17,7 +18,7 @@ export function GameCanvas() {
   
   const [gameState, setGameState] = useState<GameState>('MENU');
   const [health, setHealth] = useState({ current: 3, max: 3 });
-  const [roomInfo, setRoomInfo] = useState({ current: 0, total: 7 });
+  const [roomInfo, setRoomInfo] = useState({ current: 0, total: ROOM_CONFIGS.length });
   const [upgrades, setUpgrades] = useState<Upgrade[]>([]);
   const [isVictory, setIsVictory] = useState(false);
 
@@ -49,9 +50,9 @@ export function GameCanvas() {
     };
   }, []);
 
-  const handleStart = useCallback(async () => {
+  const handleStart = useCallback(async (selected: Difficulty) => {
     await AudioManager.resume();
-    gameRef.current?.start();
+    gameRef.current?.start(selected);
   }, []);
 
   const handleResume = useCallback(() => {
@@ -103,9 +104,7 @@ export function GameCanvas() {
         )}
 
         {/* Main Menu */}
-        {gameState === 'MENU' && (
-          <MainMenu onStart={handleStart} />
-        )}
+        {gameState === 'MENU' && <MainMenu onStart={handleStart} />}
 
         {/* Pause Menu */}
         {gameState === 'PAUSED' && (
