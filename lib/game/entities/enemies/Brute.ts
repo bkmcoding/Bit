@@ -21,14 +21,18 @@ export class Brute extends Enemy {
 
     if (distToPlayer < ENEMY.BRUTE.chaseRange) {
       const dirToPlayer = this.getDirectionToPlayer();
-      this.velocity = dirToPlayer.mul(this.speed);
+      let v = dirToPlayer.mul(this.speed);
+      v = this.blendVelocityWithHiveMind(v, 'chase', this.hiveChaseBlend());
+      this.velocity = v;
     } else {
       this.wanderTimer -= deltaTime;
       if (this.wanderTimer <= 0) {
         this.wanderDirection = new Vector2(Math.random() - 0.5, Math.random() - 0.5).normalize();
         this.wanderTimer = Math.random() * 2.5 + 1.2;
       }
-      this.velocity = this.wanderDirection.mul(this.speed * 0.45);
+      let v = this.wanderDirection.mul(this.speed * 0.45);
+      v = this.blendVelocityWithHiveMind(v, 'wander', this.hiveWanderBlend());
+      this.velocity = v;
     }
   }
 

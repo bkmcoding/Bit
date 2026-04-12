@@ -16,6 +16,8 @@ import {
   type GameState,
   type Difficulty,
 } from '../utils/constants';
+import { Broodmother } from '../entities/enemies/Broodmother';
+import { hiveMindSteerUnit, type HiveRole } from '../systems/HiveMind';
 import { Vector2 } from '../utils/Vector2';
 import { resolveCircleObstacles } from '../utils/obstacleCollision';
 import { ParticleSystem } from '../rendering/particles';
@@ -55,6 +57,8 @@ export class Game {
   /** Drives low-HP pulse and subtle flicker in the post overlay. */
   private ambiencePhase: number = 0;
   private skitterCooldown: number = 0;
+
+  private hiveMindRegistry: Map<Enemy, { i: number; n: number }> = new Map();
 
   constructor(ctx: CanvasRenderingContext2D, callbacks: GameCallbacks = {}) {
     this.ctx = ctx;
@@ -111,6 +115,7 @@ export class Game {
 
   private prepareNewRun(): void {
     this.stop();
+    this.hiveMindRegistry.clear();
     this.entities = [];
     this.projectiles = [];
     this.enemies = [];
@@ -165,6 +170,8 @@ export class Game {
     }
 
     if (this.state !== 'PLAYING') return;
+
+    this.refreshHiveMindRegistry();
 
     // Update player
     this.player.update(deltaTime);
@@ -437,7 +444,40 @@ export class Game {
     enemy.maxHealth = Math.max(1, Math.round(enemy.maxHealth * s.enemyHealthMult));
     enemy.health = enemy.maxHealth;
     enemy.damage = Math.max(1, Math.round(enemy.damage * s.enemyDamageMult));
+    enemy.speed *= s.enemySpeedMult;
     this.enemies.push(enemy);
+  }
+
+  /** Hard mode: shared bearings on a ring around the player (see HiveMind). */
+  getHiveMindSteer(
+    enemy: Enemy,
+    role: HiveRole,
+    kiteRadius?: number
+  ): Vector2 | null {
+    if (this.difficulty !== 'hard') return null;
+    const slot = this.hiveMindRegistry.get(enemy);
+    if (!slot) return null;
+    return hiveMindSteerUnit({
+      slotIndex: slot.i,
+      slotCount: slot.n,
+      playerPos: this.player.position,
+      playerVel: this.player.velocity,
+      enemyPos: enemy.position,
+      role,
+      kiteRadius,
+    });
+  }
+
+  private refreshHiveMindRegistry(): void {
+    this.hiveMindRegistry.clear();
+    if (this.difficulty !== 'hard') return;
+    const list = this.enemies.filter(
+      e => e.isActive && !e.markedForDeletion && !(e instanceof Broodmother)
+    );
+    const n = list.length;
+    for (let i = 0; i < n; i++) {
+      this.hiveMindRegistry.set(list[i], { i, n });
+    }
   }
 
   // Trigger screen shake

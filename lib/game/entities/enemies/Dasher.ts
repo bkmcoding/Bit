@@ -1,6 +1,6 @@
 import { Enemy } from './Enemy';
 import { Vector2 } from '../../utils/Vector2';
-import { ENEMY, COLORS } from '../../utils/constants';
+import { ENEMY, COLORS, HIVE_MIND_HARD } from '../../utils/constants';
 import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
 
@@ -38,6 +38,16 @@ export class Dasher extends Enemy {
     }
   }
 
+  private aimDashDirection(): Vector2 {
+    if (this.game.difficulty === 'hard') {
+      const lead = this.game.player.velocity.mul(HIVE_MIND_HARD.DASHER_LEAD_SEC);
+      const aim = this.game.player.position.add(lead).sub(this.position);
+      const m = aim.magnitude();
+      if (m > 0.15) return aim.div(m);
+    }
+    return this.getDirectionToPlayer();
+  }
+
   private updateWander(deltaTime: number): void {
     // Random movement
     if (this.stateTimer <= 0) {
@@ -51,8 +61,11 @@ export class Dasher extends Enemy {
         return;
       }
       
-      // Otherwise keep wandering
-      this.velocity = new Vector2(Math.random() - 0.5, Math.random() - 0.5).normalize().mul(this.speed);
+      let v = new Vector2(Math.random() - 0.5, Math.random() - 0.5)
+        .normalize()
+        .mul(this.speed);
+      v = this.blendVelocityWithHiveMind(v, 'wander', this.hiveWanderBlend());
+      this.velocity = v;
       this.stateTimer = Math.random() * 2 + 1;
     }
   }
@@ -62,8 +75,7 @@ export class Dasher extends Enemy {
     this.velocity.set(0, 0);
     this.chargeIndicator = 1 - (this.stateTimer / ENEMY.DASHER.chargeTime);
     
-    // Lock on to player position for dash
-    this.dashDirection = this.getDirectionToPlayer();
+    this.dashDirection = this.aimDashDirection();
     
     if (this.stateTimer <= 0) {
       AudioManager.play('SFX_DASH');

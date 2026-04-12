@@ -40,6 +40,13 @@ export class Spitter extends Enemy {
       this.shoot();
       this.fireCooldown = ENEMY.SPITTER.fireRate;
     }
+
+    this.velocity = this.blendVelocityWithHiveMind(
+      this.velocity,
+      'kite',
+      this.hiveKiteBlend(),
+      ENEMY.SPITTER.preferredDistance
+    );
   }
 
   private shoot(): void {

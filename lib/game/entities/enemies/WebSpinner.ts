@@ -1,6 +1,6 @@
 import { Enemy } from './Enemy';
 import { Vector2 } from '../../utils/Vector2';
-import { ENEMY, COLORS } from '../../utils/constants';
+import { ENEMY, COLORS, HIVE_MIND_HARD } from '../../utils/constants';
 import type { Game } from '../../engine/Game';
 
 interface WebTrap {
@@ -33,6 +33,11 @@ export class WebSpinner extends Enemy {
       this.wanderTimer = Math.random() * 3 + 2;
     }
     this.velocity = this.wanderDirection.mul(this.speed);
+    this.velocity = this.blendVelocityWithHiveMind(
+      this.velocity,
+      'wander',
+      HIVE_MIND_HARD.WEB_WANDER_BLEND
+    );
     
     // Web spawning
     this.webCooldown -= deltaTime;

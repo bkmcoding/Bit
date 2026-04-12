@@ -1,6 +1,6 @@
 import { Enemy } from './Enemy';
 import { Vector2 } from '../../utils/Vector2';
-import { ENEMY, COLORS } from '../../utils/constants';
+import { ENEMY, COLORS, HIVE_MIND_HARD } from '../../utils/constants';
 import type { Game } from '../../engine/Game';
 
 /** Fast, fragile chaser that swarms the player. */
@@ -22,15 +22,21 @@ export class Skitter extends Enemy {
 
     if (distToPlayer < ENEMY.SKITTER.chaseRange) {
       let dir = dirToPlayer;
+      const jitterMax =
+        this.game.difficulty === 'hard' ? HIVE_MIND_HARD.SKITTER_JITTER : 0.35;
       if (this.jitterTimer <= 0) {
-        const jitter = (Math.random() - 0.5) * 0.35;
+        const jitter = (Math.random() - 0.5) * jitterMax;
         dir = dir.rotate(jitter);
         this.jitterTimer = 0.12 + Math.random() * 0.1;
       }
-      this.velocity = dir.normalize().mul(this.speed);
+      let v = dir.normalize().mul(this.speed);
+      v = this.blendVelocityWithHiveMind(v, 'chase', this.hiveChaseBlend());
+      this.velocity = v;
     } else {
       const tangent = new Vector2(-dirToPlayer.y, dirToPlayer.x).normalize();
-      this.velocity = tangent.mul(this.speed * 0.55).add(dirToPlayer.mul(this.speed * 0.25));
+      let v = tangent.mul(this.speed * 0.55).add(dirToPlayer.mul(this.speed * 0.25));
+      v = this.blendVelocityWithHiveMind(v, 'wander', this.hiveWanderBlend() * 0.82);
+      this.velocity = v;
     }
   }
 

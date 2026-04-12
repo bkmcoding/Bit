@@ -1,6 +1,7 @@
 import { Entity } from '../Entity';
 import { Vector2 } from '../../utils/Vector2';
-import { COLLISION_LAYER, COLORS, GAME } from '../../utils/constants';
+import { COLLISION_LAYER, COLORS, GAME, HIVE_MIND_HARD } from '../../utils/constants';
+import type { HiveRole } from '../../systems/HiveMind';
 import { resolveCircleObstacles } from '../../utils/obstacleCollision';
 import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
@@ -124,5 +125,53 @@ export abstract class Enemy extends Entity {
   protected canSeePlayer(): boolean {
     // For now, always true. Could add wall checking later
     return true;
+  }
+
+  /**
+   * Hard mode: hive nudges *bearing spread* without replacing the drive to close for melee.
+   * Chase uses tangential-only hive (radial intent stays toward the player) so circular
+   * player movement does not turn into a mirrored merry-go-round.
+   */
+  protected blendVelocityWithHiveMind(
+    velocity: Vector2,
+    role: HiveRole,
+    blend: number,
+    kiteRadius?: number
+  ): Vector2 {
+    if (this.game.difficulty !== 'hard') return velocity;
+    const steer = this.game.getHiveMindSteer(this, role, kiteRadius);
+    if (!steer) return velocity;
+    const speed = velocity.magnitude();
+    if (speed < 1e-4) return velocity;
+    const w = Math.max(0, Math.min(1, blend));
+
+    if (role === 'chase') {
+      const toP = this.getDirectionToPlayer();
+      const radialPart = toP.mul(toP.dot(steer));
+      let tang = steer.sub(radialPart);
+      if (tang.magnitudeSq() < 1e-6) {
+        tang = new Vector2(-toP.y, toP.x);
+      } else {
+        tang.normalizeMut();
+      }
+      const newDir = toP.mul(1 - w).add(tang.mul(w)).normalize();
+      return newDir.mul(speed);
+    }
+
+    const baseDir = velocity.normalize();
+    const newDir = baseDir.mul(1 - w).add(steer.mul(w)).normalize();
+    return newDir.mul(speed);
+  }
+
+  protected hiveChaseBlend(): number {
+    return HIVE_MIND_HARD.CHASE_BLEND;
+  }
+
+  protected hiveKiteBlend(): number {
+    return HIVE_MIND_HARD.KITE_BLEND;
+  }
+
+  protected hiveWanderBlend(): number {
+    return HIVE_MIND_HARD.WANDER_BLEND;
   }
 }

@@ -49,6 +49,13 @@ export class Widow extends Enemy {
         this.timeToNextShotInBurst = 0;
       }
     }
+
+    this.velocity = this.blendVelocityWithHiveMind(
+      this.velocity,
+      'kite',
+      this.hiveKiteBlend(),
+      ENEMY.WIDOW.preferredDistance
+    );
   }
 
   private fireShot(): void {

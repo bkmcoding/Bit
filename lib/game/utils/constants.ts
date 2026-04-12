@@ -30,6 +30,8 @@ export const DIFFICULTY_SETTINGS: Record<
   {
     enemyHealthMult: number;
     enemyDamageMult: number;
+    /** Multiplies enemy move speed after spawn (chase, kite, wander). */
+    enemySpeedMult: number;
     /** Multiplies seconds-between-shots; lower = faster shooting for the player. */
     playerFireRateMult: number;
     spawnProtectionSec: number;
@@ -38,22 +40,44 @@ export const DIFFICULTY_SETTINGS: Record<
   easy: {
     enemyHealthMult: 0.82,
     enemyDamageMult: 0.78,
+    enemySpeedMult: 1,
     playerFireRateMult: 0.88,
     spawnProtectionSec: 3.0,
   },
   medium: {
     enemyHealthMult: 1,
     enemyDamageMult: 1,
+    enemySpeedMult: 1,
     playerFireRateMult: 1,
     spawnProtectionSec: 2.45,
   },
   hard: {
-    enemyHealthMult: 1.22,
-    enemyDamageMult: 1.22,
+    enemyHealthMult: 1.28,
+    enemyDamageMult: 1.25,
+    enemySpeedMult: 1.09,
     playerFireRateMult: 1.12,
     spawnProtectionSec: 1.85,
   },
 };
+
+/** Hard-only coordinated AI: ring slots (see `HiveMind.ts`). */
+export const HIVE_MIND_HARD = {
+  RING_CHASE: 44,
+  /** When the player is nearly still, melee hive ring shrinks toward the player. */
+  RING_CHASE_CLOSE: 22,
+  RING_WANDER: 62,
+  /** Light prediction for kiters only (px); chase uses actual player pos to avoid “dancing”. */
+  KITE_PREDICT_SEC: 0.1,
+  /** Player speed (px/s) for ring-radius lerp (still vs moving). */
+  SPIN_RAMP_SPEED: 36,
+  /** Weight of hive *tangential* spread while chasing; most of the vector stays toward the player. */
+  CHASE_BLEND: 0.24,
+  KITE_BLEND: 0.26,
+  WANDER_BLEND: 0.22,
+  WEB_WANDER_BLEND: 0.34,
+  SKITTER_JITTER: 0.14,
+  DASHER_LEAD_SEC: 0.06,
+} as const;
 
 // Projectile settings
 export const PROJECTILE = {

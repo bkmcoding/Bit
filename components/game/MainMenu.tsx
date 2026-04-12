@@ -12,7 +12,11 @@ interface MainMenuProps {
 const DIFFICULTY_OPTIONS: { id: Difficulty; label: string; hint: string }[] = [
   { id: 'easy', label: 'Easy', hint: 'Softer enemies, faster shots, longer spawn shield' },
   { id: 'medium', label: 'Medium', hint: 'Balanced' },
-  { id: 'hard', label: 'Hard', hint: 'Tougher foes, slower shots' },
+  {
+    id: 'hard',
+    label: 'Hard',
+    hint: 'Stronger, faster foes; slower shots; coordinated hive AI',
+  },
 ]
 
 export function MainMenu({ onStart }: MainMenuProps) {

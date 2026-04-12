@@ -22,17 +22,19 @@ export class Spider extends Enemy {
     this.legAnimation += deltaTime * 10;
     
     if (distToPlayer < ENEMY.SPIDER.chaseRange) {
-      // Chase player
       const dirToPlayer = this.getDirectionToPlayer();
-      this.velocity = dirToPlayer.mul(this.speed);
+      let v = dirToPlayer.mul(this.speed);
+      v = this.blendVelocityWithHiveMind(v, 'chase', this.hiveChaseBlend());
+      this.velocity = v;
     } else {
-      // Wander
       this.wanderTimer -= deltaTime;
       if (this.wanderTimer <= 0) {
         this.wanderDirection = new Vector2(Math.random() - 0.5, Math.random() - 0.5).normalize();
         this.wanderTimer = Math.random() * 2 + 1;
       }
-      this.velocity = this.wanderDirection.mul(this.speed * 0.5);
+      let v = this.wanderDirection.mul(this.speed * 0.5);
+      v = this.blendVelocityWithHiveMind(v, 'wander', this.hiveWanderBlend());
+      this.velocity = v;
     }
   }
 
