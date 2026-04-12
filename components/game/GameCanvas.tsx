@@ -27,7 +27,7 @@ export function GameCanvas() {
     gameStateRef.current = gameState;
   }, [gameState]);
 
-  /** Browsers require a gesture before audio; first pointer or key unlocks + menu track when on the menu. */
+  /** Unmutes policy-muted HTML menu audio and resumes Web Audio; runs once per page load. */
   const audioGestureDoneRef = useRef(false);
   const primeAudioFromGesture = useCallback(() => {
     if (audioGestureDoneRef.current) return;
@@ -41,8 +41,13 @@ export function GameCanvas() {
   }, []);
 
   useEffect(() => {
-    window.addEventListener('keydown', primeAudioFromGesture, { passive: true });
-    return () => window.removeEventListener('keydown', primeAudioFromGesture);
+    const opts = { capture: true, passive: true } as const;
+    document.addEventListener('pointerdown', primeAudioFromGesture, opts);
+    window.addEventListener('keydown', primeAudioFromGesture, opts);
+    return () => {
+      document.removeEventListener('pointerdown', primeAudioFromGesture, opts);
+      window.removeEventListener('keydown', primeAudioFromGesture, opts);
+    };
   }, [primeAudioFromGesture]);
 
   // Initialize game
@@ -97,10 +102,7 @@ export function GameCanvas() {
   }, []);
 
   return (
-    <div
-      className="relative w-full h-full flex items-center justify-center bg-black"
-      onPointerDownCapture={primeAudioFromGesture}
-    >
+    <div className="relative w-full h-full flex items-center justify-center bg-black">
       <div 
         className="relative"
         style={{ 

@@ -124,6 +124,23 @@ class AudioManagerClass {
   // Fallback oscillator-based sounds when audio files aren't available
   private useFallback: boolean = true;
 
+  /**
+   * Menu music uses an HTMLMediaElement: browsers allow muted autoplay, and unmuted autoplay
+   * often succeeds when the user navigated here with a tap/click (transient activation).
+   * Web Audio stays suspended longer under the same policy, so gameplay/SFX still use the graph.
+   */
+  private menuHtmlAudio: HTMLAudioElement | null = null;
+  private menuHtmlActive = false;
+  /** Menu track is playing but only at full level after `resume()` clears policy-driven `muted`. */
+  private menuHtmlPolicyMute = false;
+  /** Next `MUSIC_MENU` start uses zero gain/volume until `crossfadeMenuStaticToMusic` (or manual update). */
+  private pendingMenuMusicSilentStart = false;
+  private menuHtmlVolumeRampRaf: number | null = null;
+  /** Looped TV static under the main-menu boot veil (Web Audio noise). */
+  private menuTvStaticSource: AudioBufferSourceNode | null = null;
+  private menuTvStaticGain: GainNode | null = null;
+  private menuTvStaticStopTimer: ReturnType<typeof setTimeout> | null = null;
+
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
     
@@ -418,12 +435,260 @@ class AudioManagerClass {
    */
   private shouldKeepCurrentMusicTrack(track: MusicTrack): boolean {
     if (this.currentMusicTrack !== track) return false;
+    if (track === 'MUSIC_MENU' && this.menuHtmlActive) return true;
     if (this.currentMusic !== null) return true;
     if (
       (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS') &&
       this.horrorOscillators.length > 0
     ) {
       return true;
+    }
+    return false;
+  }
+
+  private ensureMenuHtmlAudio(): HTMLAudioElement | null {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+    if (!this.menuHtmlAudio) {
+      const el = document.createElement('audio');
+      el.preload = 'auto';
+      el.setAttribute('playsInline', '');
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      this.menuHtmlAudio = el;
+    }
+    return this.menuHtmlAudio;
+  }
+
+  private cancelMenuHtmlVolumeRamp(): void {
+    if (this.menuHtmlVolumeRampRaf !== null) {
+      cancelAnimationFrame(this.menuHtmlVolumeRampRaf);
+      this.menuHtmlVolumeRampRaf = null;
+    }
+  }
+
+  private stopMenuHtmlAudio(): void {
+    this.cancelMenuHtmlVolumeRamp();
+    if (!this.menuHtmlAudio) return;
+    try {
+      this.menuHtmlAudio.pause();
+    } catch {
+      // ignore
+    }
+    this.menuHtmlAudio.removeAttribute('src');
+    try {
+      this.menuHtmlAudio.load();
+    } catch {
+      // ignore
+    }
+    this.menuHtmlActive = false;
+    this.menuHtmlPolicyMute = false;
+  }
+
+  private stopMenuTvStatic(): void {
+    if (this.menuTvStaticStopTimer !== null) {
+      clearTimeout(this.menuTvStaticStopTimer);
+      this.menuTvStaticStopTimer = null;
+    }
+    if (this.menuTvStaticSource) {
+      try {
+        this.menuTvStaticSource.stop();
+      } catch {
+        // ignore
+      }
+      try {
+        this.menuTvStaticSource.disconnect();
+      } catch {
+        // ignore
+      }
+      this.menuTvStaticSource = null;
+    }
+    if (this.menuTvStaticGain) {
+      try {
+        this.menuTvStaticGain.disconnect();
+      } catch {
+        // ignore
+      }
+      this.menuTvStaticGain = null;
+    }
+  }
+
+  private createTvStaticNoiseBuffer(durationSec: number): AudioBuffer {
+    const ctx = this.audioContext!;
+    const sampleRate = ctx.sampleRate;
+    const n = Math.max(1, Math.floor(sampleRate * durationSec));
+    const buffer = ctx.createBuffer(1, n, sampleRate);
+    const d = buffer.getChannelData(0);
+    for (let i = 0; i < n; i++) {
+      d[i] = (Math.random() * 2 - 1) * 0.9;
+    }
+    return buffer;
+  }
+
+  /**
+   * Looped TV static (quiet); gain ramps from 0 → target over `fadeInMs`.
+   * Runs until `crossfadeMenuStaticToMusic` stops it.
+   */
+  startMenuTvStaticLoop(fadeInMs: number = 900): void {
+    this.stopMenuTvStatic();
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+
+    const buf = this.createTvStaticNoiseBuffer(1.25);
+    const src = this.audioContext.createBufferSource();
+    const g = this.audioContext.createGain();
+    src.buffer = buf;
+    src.loop = true;
+    const targetVol = 0.035 * this.settings.masterVolume;
+    const t = this.audioContext.currentTime;
+    const fadeSec = Math.max(0.05, fadeInMs / 1000);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(targetVol, t + fadeSec);
+    src.connect(g);
+    g.connect(this.audioContext.destination);
+    src.start(0);
+    this.menuTvStaticSource = src;
+    this.menuTvStaticGain = g;
+  }
+
+  /** Next menu music playback starts at zero volume/gain for a crossfade from TV static. */
+  beginMenuMusicSilentStart(): void {
+    this.pendingMenuMusicSilentStart = true;
+  }
+
+  /**
+   * Smooth crossfade: static eases out on a cosine quarter; menu music eases in on a sine quarter
+   * after `musicDelayMs` so it overlaps the tail of the static fade (less harsh than linear + simultaneous).
+   */
+  crossfadeMenuStaticToMusic(options: {
+    staticFadeOutMs: number;
+    musicFadeInMs: number;
+    /** When menu music begins its fade (after static has started ducking). */
+    musicDelayMs?: number;
+  }): void {
+    const { staticFadeOutMs, musicFadeInMs, musicDelayMs = 0 } = options;
+    const staticSec = Math.max(0.08, staticFadeOutMs / 1000);
+    const musicSec = Math.max(0.08, musicFadeInMs / 1000);
+    const delaySec = Math.max(0, musicDelayMs / 1000);
+    const ctx = this.audioContext;
+
+    const curvePoints = 192;
+    const cosQuarterCurve = (from: number): Float32Array => {
+      const c = new Float32Array(curvePoints);
+      for (let i = 0; i < curvePoints; i++) {
+        const p = i / (curvePoints - 1);
+        c[i] = Math.max(1e-4, from * Math.cos(p * Math.PI * 0.5));
+      }
+      return c;
+    };
+    const sinQuarterCurve = (to: number): Float32Array => {
+      const c = new Float32Array(curvePoints);
+      for (let i = 0; i < curvePoints; i++) {
+        const p = i / (curvePoints - 1);
+        c[i] = to * Math.sin(p * Math.PI * 0.5);
+      }
+      return c;
+    };
+
+    if (ctx && this.menuTvStaticGain) {
+      const g = this.menuTvStaticGain.gain;
+      const t = ctx.currentTime;
+      const now = Math.max(1e-4, g.value);
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(now, t);
+      try {
+        g.setValueCurveAtTime(cosQuarterCurve(now), t, staticSec);
+      } catch {
+        g.exponentialRampToValueAtTime(0.0001, t + staticSec);
+      }
+    }
+
+    const target = this.settings.muted ? 0 : this.settings.musicVolume * this.settings.masterVolume;
+
+    if (this.menuHtmlActive && this.menuHtmlAudio) {
+      this.cancelMenuHtmlVolumeRamp();
+      const t0 = performance.now();
+      const step = (frameNow: number) => {
+        if (!this.menuHtmlAudio || !this.menuHtmlActive) {
+          this.menuHtmlVolumeRampRaf = null;
+          return;
+        }
+        const elapsed = frameNow - t0;
+        let vol = 0;
+        if (elapsed >= musicDelayMs) {
+          const u = Math.min(1, (elapsed - musicDelayMs) / musicFadeInMs);
+          vol = target * Math.sin(u * Math.PI * 0.5);
+        }
+        this.menuHtmlAudio.volume = vol;
+        const totalEnd = musicDelayMs + musicFadeInMs;
+        if (elapsed < totalEnd) {
+          this.menuHtmlVolumeRampRaf = requestAnimationFrame(step);
+        } else {
+          this.menuHtmlVolumeRampRaf = null;
+          this.menuHtmlAudio.volume = target;
+        }
+      };
+      this.menuHtmlVolumeRampRaf = requestAnimationFrame(step);
+    }
+
+    if (this.currentMusicGain && ctx && this.currentMusicTrack === 'MUSIC_MENU') {
+      const g = this.currentMusicGain.gain;
+      const t = ctx.currentTime;
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(0, t);
+      const tMusic = t + delaySec;
+      g.setValueAtTime(0, tMusic);
+      try {
+        g.setValueCurveAtTime(sinQuarterCurve(target), tMusic, musicSec);
+      } catch {
+        g.linearRampToValueAtTime(target, tMusic + musicSec);
+      }
+    }
+
+    const stopAfter = Math.max(staticFadeOutMs, musicDelayMs + musicFadeInMs) + 200;
+    if (this.menuTvStaticStopTimer !== null) {
+      clearTimeout(this.menuTvStaticStopTimer);
+    }
+    this.menuTvStaticStopTimer = setTimeout(() => {
+      this.menuTvStaticStopTimer = null;
+      this.stopMenuTvStatic();
+    }, stopAfter);
+  }
+
+  private applyMenuHtmlVolume(): void {
+    if (!this.menuHtmlAudio || !this.menuHtmlActive || this.menuHtmlVolumeRampRaf !== null) return;
+    const v = this.settings.muted ? 0 : this.settings.musicVolume * this.settings.masterVolume;
+    this.menuHtmlAudio.volume = v;
+  }
+
+  /** Try each public path; unmuted play first, then muted autoplay (browser policy). */
+  private async tryStartMenuMusicHtml(): Promise<boolean> {
+    const el = this.ensureMenuHtmlAudio();
+    if (!el) return false;
+
+    for (const path of MUSIC_SEARCH_PATHS.MUSIC_MENU) {
+      el.loop = true;
+      el.src = path;
+      const targetVol = this.settings.muted ? 0 : this.settings.musicVolume * this.settings.masterVolume;
+      const silentStart = this.pendingMenuMusicSilentStart;
+      el.volume = silentStart ? 0 : targetVol;
+      el.muted = false;
+      try {
+        await el.play();
+        this.menuHtmlActive = true;
+        this.menuHtmlPolicyMute = false;
+        if (silentStart) this.pendingMenuMusicSilentStart = false;
+        return true;
+      } catch {
+        el.muted = true;
+        try {
+          await el.play();
+          this.menuHtmlActive = true;
+          this.menuHtmlPolicyMute = true;
+          if (silentStart) this.pendingMenuMusicSilentStart = false;
+          return true;
+        } catch {
+          // try next path
+        }
+      }
     }
     return false;
   }
@@ -438,15 +703,30 @@ class AudioManagerClass {
   }
 
   private async runPlayMusic(track: MusicTrack): Promise<void> {
-    if (!this.audioContext || !this.isInitialized) return;
+    if (!this.isInitialized) return;
 
     if (this.shouldKeepCurrentMusicTrack(track)) {
       this.updateMusicVolume();
       return;
     }
 
-    this.hardStopMusicAndBeds();
+    const preserveTvStaticForCrossfade =
+      track === 'MUSIC_MENU' && this.pendingMenuMusicSilentStart;
+    this.hardStopMusicAndBeds(
+      preserveTvStaticForCrossfade ? { preserveTvStatic: true } : undefined
+    );
     this.currentMusicTrack = track;
+
+    if (track === 'MUSIC_MENU' && typeof window !== 'undefined') {
+      const htmlOk = await this.tryStartMenuMusicHtml();
+      if (htmlOk) {
+        this.syncHorrorWithTrack(track);
+        await this.refreshAmbienceLoops(track);
+        return;
+      }
+    }
+
+    if (!this.audioContext) return;
 
     let buffer: AudioBuffer | null = null;
     for (const path of MUSIC_SEARCH_PATHS[track]) {
@@ -473,7 +753,9 @@ class AudioManagerClass {
 
     const volume = this.settings.muted ? 0 :
       this.settings.musicVolume * this.settings.masterVolume;
-    this.currentMusicGain.gain.value = volume;
+    const silentStart = this.pendingMenuMusicSilentStart;
+    this.currentMusicGain.gain.value = silentStart ? 0 : volume;
+    if (silentStart) this.pendingMenuMusicSilentStart = false;
 
     this.currentMusic.connect(this.currentMusicGain);
     this.currentMusicGain.connect(this.audioContext.destination);
@@ -486,8 +768,13 @@ class AudioManagerClass {
   /**
    * Stops the looping music buffer and tears down horror + ambience beds.
    * Used when switching tracks so nothing from the previous mode keeps playing.
+   * `preserveTvStatic`: keep TV static running (menu boot crossfade into MUSIC_MENU).
    */
-  hardStopMusicAndBeds(): void {
+  hardStopMusicAndBeds(opts?: { preserveTvStatic?: boolean }): void {
+    if (!opts?.preserveTvStatic) {
+      this.stopMenuTvStatic();
+    }
+    this.stopMenuHtmlAudio();
     if (this.currentMusic) {
       try {
         this.currentMusic.stop();
@@ -803,6 +1090,7 @@ class AudioManagerClass {
         this.audioContext.currentTime
       );
     }
+    this.applyMenuHtmlVolume();
     this.updateHorrorVolume();
     this.updateAmbienceLoopGains();
   }
@@ -811,8 +1099,16 @@ class AudioManagerClass {
     return { ...this.settings };
   }
 
-  // Resume audio context after user interaction
+  // Resume audio context after user interaction; also lifts policy mute on HTML menu music.
   async resume(): Promise<void> {
+    if (this.menuHtmlPolicyMute && this.menuHtmlAudio && this.menuHtmlActive) {
+      if (!this.settings.muted) {
+        this.menuHtmlAudio.muted = false;
+      }
+      this.menuHtmlPolicyMute = false;
+      this.applyMenuHtmlVolume();
+      void this.menuHtmlAudio.play().catch(() => undefined);
+    }
     if (this.audioContext?.state === 'suspended') {
       await this.audioContext.resume();
     }
