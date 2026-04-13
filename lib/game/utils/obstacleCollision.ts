@@ -43,3 +43,44 @@ export function circleOverlapsObstacle(cx: number, cy: number, radius: number, r
   }
   return false;
 }
+
+/**
+ * Each `false` cell becomes solid collision (8×8 tiles). Row sweep plus vertical merge
+ * keeps the rectangle count reasonable for shaped rooms.
+ */
+export function walkableGridToWallRects(walk: boolean[][], tileSize: number): ObstacleRect[] {
+  const th = walk.length;
+  const tw = walk[0]?.length ?? 0;
+  if (th === 0 || tw === 0) return [];
+
+  const rowRects: ObstacleRect[] = [];
+  for (let ty = 0; ty < th; ty++) {
+    let tx = 0;
+    while (tx < tw) {
+      if (walk[ty][tx]) {
+        tx++;
+        continue;
+      }
+      const tx0 = tx;
+      while (tx < tw && !walk[ty][tx]) tx++;
+      rowRects.push({
+        x: tx0 * tileSize,
+        y: ty * tileSize,
+        w: (tx - tx0) * tileSize,
+        h: tileSize,
+      });
+    }
+  }
+
+  rowRects.sort((a, b) => a.x - b.x || a.y - b.y || a.w - b.w);
+  const merged: ObstacleRect[] = [];
+  for (const r of rowRects) {
+    const last = merged[merged.length - 1];
+    if (last && last.x === r.x && last.w === r.w && last.y + last.h === r.y) {
+      last.h += r.h;
+    } else {
+      merged.push({ ...r });
+    }
+  }
+  return merged;
+}

@@ -100,9 +100,9 @@ export class Player extends Entity {
     if (room) {
       const halfSize = this.size / 2;
       const minX = room.wallThickness + halfSize;
-      const maxX = GAME.NATIVE_WIDTH - room.wallThickness - halfSize;
+      const maxX = room.width - room.wallThickness - halfSize;
       const minY = room.wallThickness + halfSize;
-      const maxY = GAME.NATIVE_HEIGHT - room.wallThickness - halfSize;
+      const maxY = room.height - room.wallThickness - halfSize;
       
       this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
       this.position.y = Math.max(minY, Math.min(maxY, this.position.y));
@@ -114,9 +114,8 @@ export class Player extends Entity {
       }
     }
     
-    // Update facing angle toward mouse
-    const mousePos = input.getMousePosition();
-    this.facingAngle = this.position.angleTo(mousePos);
+    const aimMouse = this.game.getAimMousePosition();
+    this.facingAngle = this.position.angleTo(aimMouse);
     
     // Shooting
     this.fireCooldown -= deltaTime;
@@ -144,7 +143,8 @@ export class Player extends Entity {
 
   private shoot(): void {
     AudioManager.play('SFX_SHOOT');
-    const aimDir = this.game.input.getAimDirection(this.position);
+    const aimMouse = this.game.getAimMousePosition();
+    const aimDir = aimMouse.sub(this.position).normalize();
     this.spawnBullet(aimDir);
   }
 

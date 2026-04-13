@@ -1,13 +1,11 @@
-import { GAME } from '../utils/constants';
-
 /**
- * Uniforms for the post pass: mild CRT/chroma/static, corner vignette, moon shaft, player rim.
+ * Post pass: horror through obscurity, not optical blur — crisp NEAREST sample, no chroma, no warp.
+ * Darkness, strong vignette, corner crush, and luma-based shadow crushing — no radial/spoke patterns.
  */
 export type GamePostUniforms = {
   time: number;
   playerX: number;
   playerY: number;
-  /** 1 = apply player + moon; 0 = raw-ish (e.g. menu). */
   reactiveMood: number;
   moonOriginX: number;
   moonOriginY: number;
@@ -54,15 +52,10 @@ void main() {
 }
 `;
 
-/**
- * No barrel warp (avoids edge stretch / clamp artifacts). Mild grade, light CRT hints,
- * soft corner-only shading (does not darken whole walls — doors stay readable).
- */
 const FS = `
 precision mediump float;
 varying vec2 v_uv;
 uniform sampler2D u_game;
-uniform vec2 u_texel;
 uniform float u_time;
 uniform vec2 u_playerUv;
 uniform float u_reactive;
@@ -71,88 +64,85 @@ uniform vec2 u_moonDir;
 uniform float u_moonSpread;
 uniform float u_moonStrength;
 
-float hash(vec2 p) {
+float hash21(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
-float hash3(vec3 p) {
-  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
-}
 
-// Horizontal-only fringing — no radial Y offsets (cleaner edges than full radial CA).
-vec3 sampleChroma(vec2 tc, vec2 vuv) {
-  float ab = length(vuv - 0.5) * 0.0038 + 0.0006;
-  float r = texture2D(u_game, vec2(clamp(tc.x - ab, 0.001, 0.999), tc.y)).r;
-  float g = texture2D(u_game, tc).g;
-  float b = texture2D(u_game, vec2(clamp(tc.x + ab, 0.001, 0.999), tc.y)).b;
-  return vec3(r, g, b);
+vec3 tap(vec2 tc) {
+  return texture2D(u_game, clamp(tc, vec2(0.001), vec2(0.999))).rgb;
 }
 
 void main() {
+  float mood = u_reactive;
+  float t = u_time;
   vec2 uv = v_uv;
-  vec2 tc = vec2(uv.x, 1.0 - uv.y);
 
-  vec3 col = sampleChroma(tc, uv);
+  vec3 col;
+  if (mood < 0.5) {
+    vec2 tc = vec2(uv.x, 1.0 - uv.y);
+    col = tap(tc);
+    col *= 0.9;
+    vec2 qv = uv - 0.5;
+    float vig = clamp(1.0 - dot(qv, qv) * 0.55, 0.78, 1.0);
+    col *= vig;
+  } else {
+  float M = mood;
+  vec2 tc0 = vec2(uv.x, 1.0 - uv.y);
+  col = tap(tc0);
 
-  // Subtle corner shading only (short range — not full wall bands, so doors stay visible)
-  float dCr = min(min(length(tc), length(tc - vec2(1.0, 0.0))),
-                  min(length(tc - vec2(0.0, 1.0)), length(tc - vec2(1.0, 1.0))));
-  float cornerSh = mix(0.9, 1.0, smoothstep(0.02, 0.28, dCr));
+  vec2 q = uv - 0.5;
+  float ql = length(q);
+
+  float dCr = min(min(length(tc0), length(tc0 - vec2(1.0, 0.0))),
+                  min(length(tc0 - vec2(0.0, 1.0)), length(tc0 - vec2(1.0, 1.0))));
+  float cornerSh = mix(0.4, 1.0, smoothstep(0.012, 0.36, dCr));
   col *= cornerSh;
 
-  // Light vignette (floor never crushed)
-  vec2 qv = uv - 0.5;
-  float vig = clamp(1.0 - dot(qv, qv) * 0.55, 0.72, 1.0);
+  float breathe = 0.96 + 0.04 * sin(t * 0.55 + ql * 1.8);
+  float vigAmt = 1.22 * M * breathe;
+  float vigFloor = 0.045;
+  float vig = clamp(1.0 - dot(q, q) * vigAmt, vigFloor, 1.0);
   col *= vig;
 
-  // Slight cool cast, modest darken
-  vec3 cool = col * vec3(0.88, 0.9, 0.98);
-  col = mix(col, cool, 0.28);
-  col *= 0.9;
+  float peak = max(max(col.r, col.g), col.b);
+  float inShadow = 1.0 - smoothstep(0.04, 0.28, peak);
+  col *= mix(1.0, 0.52, inShadow * M);
 
-  if (u_reactive > 0.5) {
-    vec2 pd = tc - u_playerUv;
-    float d = length(pd) * 5.2;
-    float pulse = 0.88 + 0.12 * sin(u_time * 2.0);
-    float rim = exp(-d * d * 0.42) * 0.2 * pulse;
-    col += rim * vec3(0.12, 0.11, 0.1);
+  vec3 sick = col * vec3(0.82, 0.88, 0.74);
+  vec3 bruise = col * vec3(0.76, 0.72, 0.86);
+  col = mix(col, sick, 0.12 * M);
+  col = mix(col, bruise, 0.1 * M);
+  col *= 0.68 * M + (1.0 - M);
 
-    vec2 to = tc - u_moonOrigin;
-    float along = dot(to, u_moonDir);
-    vec2 perpV = vec2(-u_moonDir.y, u_moonDir.x);
-    float across = dot(to, perpV);
-    float spreadSq = u_moonSpread * u_moonSpread;
-    float beam = exp(-across * across / max(spreadSq, 0.0001));
-    float depth = 0.0;
-    if (along > 0.0) {
-      depth = beam * exp(-along * 1.25) * smoothstep(-0.02, 0.06, along);
-    }
-    float drift = 0.92 + 0.08 * sin(u_time * 0.4);
-    col += depth * u_moonStrength * drift * vec3(0.1, 0.11, 0.16);
+  col = pow(max(col, vec3(0.0005)), vec3(1.07));
+
+  float rf = hash21(uv * 350.0 + floor(t * 3.5));
+  if (rf > 0.996) col *= 0.5;
+  else if (rf > 0.99) col *= 0.78;
+
+  vec2 pd = tc0 - u_playerUv;
+  float d = length(pd) * 5.2;
+  float rim = exp(-d * d * 0.42) * 0.055;
+  col += rim * vec3(0.055, 0.05, 0.062);
+
+  vec2 to = tc0 - u_moonOrigin;
+  float along = dot(to, u_moonDir);
+  vec2 perpV = vec2(-u_moonDir.y, u_moonDir.x);
+  float across = dot(to, perpV);
+  float spreadSq = u_moonSpread * u_moonSpread;
+  float beam = exp(-across * across / max(spreadSq, 0.0001));
+  float depth = 0.0;
+  if (along > 0.0) {
+    depth = beam * exp(-along * 1.55) * smoothstep(-0.02, 0.06, along);
   }
+  col += depth * u_moonStrength * 0.45 * vec3(0.04, 0.044, 0.056);
 
-  // Light static
   vec2 scr = gl_FragCoord.xy;
-  vec2 crawl = u_time * vec2(48.0, 37.0);
-  float n1 = hash3(vec3(floor(scr * 0.85 + crawl), floor(u_time * 20.0)));
-  float n2 = hash3(vec3(floor(scr * 1.4 - crawl * 0.45), floor(u_time * 15.0)));
-  float n3 = hash(floor(tc / u_texel + u_time * vec2(5.0, 7.0)));
-  float snow = (n1 * 0.4 + n2 * 0.35 + n3 * 0.25 - 0.5) * 0.045;
-  col += vec3(snow);
+  float g = hash21(floor(scr * 0.5) + floor(t * 0.9));
+  col += (g - 0.5) * 0.014 * M;
 
-  float fl = 0.022 * sin(u_time * 6.5) + 0.012 * sin(u_time * 12.0);
-  col *= 1.0 - fl;
-
-  // TV scanlines (full frame: title, gameplay, pause — anything through this pass)
-  float py = gl_FragCoord.y;
-  float oddRow = step(0.5, mod(py, 2.0));
-  float triple = step(0.5, mod(py, 3.0));
-  float scanMul = mix(0.9, 1.0, oddRow) * mix(0.965, 1.0, triple);
-  col *= scanMul;
-
-  float ph = mod(gl_FragCoord.x + gl_FragCoord.y * 0.5, 3.0);
-  vec3 mask = ph < 1.0 ? vec3(1.015, 0.992, 0.992) : (ph < 2.0 ? vec3(0.992, 1.012, 0.992) : vec3(0.992, 0.992, 1.015));
-  col *= mask;
-
+  col *= 1.0;
+  }
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
@@ -218,7 +208,6 @@ export function createGameGlPresenter(displayCanvas: HTMLCanvasElement): GameGlP
 
   const loc = {
     game: gl.getUniformLocation(program, 'u_game'),
-    texel: gl.getUniformLocation(program, 'u_texel'),
     time: gl.getUniformLocation(program, 'u_time'),
     playerUv: gl.getUniformLocation(program, 'u_playerUv'),
     reactive: gl.getUniformLocation(program, 'u_reactive'),
@@ -227,9 +216,6 @@ export function createGameGlPresenter(displayCanvas: HTMLCanvasElement): GameGlP
     moonSpread: gl.getUniformLocation(program, 'u_moonSpread'),
     moonStrength: gl.getUniformLocation(program, 'u_moonStrength'),
   };
-
-  const texelW = 1 / GAME.NATIVE_WIDTH;
-  const texelH = 1 / GAME.NATIVE_HEIGHT;
 
   return {
     present(source: HTMLCanvasElement | OffscreenCanvas, uniforms: GamePostUniforms): void {
@@ -247,7 +233,6 @@ export function createGameGlPresenter(displayCanvas: HTMLCanvasElement): GameGlP
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source as TexImageSource);
       gl.uniform1i(loc.game, 0);
-      gl.uniform2f(loc.texel, texelW, texelH);
       gl.uniform1f(loc.time, uniforms.time);
       gl.uniform2f(loc.playerUv, uniforms.playerX, uniforms.playerY);
       gl.uniform1f(loc.reactive, uniforms.reactiveMood);

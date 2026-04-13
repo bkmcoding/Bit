@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Game } from '@/lib/game/engine/Game';
+import { Game, type RoomHudPayload } from '@/lib/game/engine/Game';
 import { GAME, type GameState, type Difficulty } from '@/lib/game/utils/constants';
-import { ROOM_CONFIGS } from '@/lib/game/rooms/roomData';
+import { ROOM_COUNT, type MinimapLayout } from '@/lib/game/rooms/roomData';
 import type { Upgrade } from '@/lib/game/upgrades/Upgrade';
 import { AudioManager } from '@/lib/game/audio/AudioManager';
 import { createGameGlPresenter } from '@/lib/game/rendering/webglHorrorPresent';
@@ -18,6 +18,8 @@ const MENU_TO_GAME_COVER_MS = 620;
 const MENU_AUDIO_LEAVE_MS = 880;
 const GAMEPLAY_MUSIC_FADE_IN_MS = 2000;
 
+const EMPTY_MINIMAP: MinimapLayout = { positions: [], edges: [] };
+
 export function GameCanvas() {
   const bufferRef = useRef<HTMLCanvasElement>(null);
   const glRef = useRef<HTMLCanvasElement>(null);
@@ -26,7 +28,13 @@ export function GameCanvas() {
   
   const [gameState, setGameState] = useState<GameState>('MENU');
   const [health, setHealth] = useState({ current: 3, max: 3 });
-  const [roomInfo, setRoomInfo] = useState({ current: 0, total: ROOM_CONFIGS.length });
+  const [hud, setHud] = useState<RoomHudPayload>({
+    current: 0,
+    total: ROOM_COUNT,
+    theme: 'cellar',
+    minimap: EMPTY_MINIMAP,
+    enteredRooms: [],
+  });
   const [upgrades, setUpgrades] = useState<Upgrade[]>([]);
   const [isVictory, setIsVictory] = useState(false);
   /** Fullscreen black cover opacity (0–1) for menu → gameplay. */
@@ -77,7 +85,7 @@ export function GameCanvas() {
     const game = new Game(ctx, {
       onStateChange: setGameState,
       onHealthChange: (current, max) => setHealth({ current, max }),
-      onRoomChange: (current, total) => setRoomInfo({ current, total }),
+      onRoomChange: setHud,
       onUpgradeSelect: setUpgrades,
       onGameOver: (victory) => setIsVictory(victory),
       onPresentFrame: presenter ? (src, u) => presenter.present(src, u) : undefined,
@@ -133,8 +141,8 @@ export function GameCanvas() {
       >
         <canvas
           ref={bufferRef}
-          width={GAME.NATIVE_WIDTH}
-          height={GAME.NATIVE_HEIGHT}
+          width={GAME.BUFFER_WIDTH}
+          height={GAME.BUFFER_HEIGHT}
           className={
             displayMode === 'webgl'
               ? 'pointer-events-none absolute left-0 top-0 h-px w-px opacity-0'
@@ -165,11 +173,14 @@ export function GameCanvas() {
 
         {/* UI Overlay */}
         {gameState === 'PLAYING' && (
-          <GameUI 
+          <GameUI
             health={health.current}
             maxHealth={health.max}
-            currentRoom={roomInfo.current}
-            totalRooms={roomInfo.total}
+            currentRoom={hud.current}
+            totalRooms={hud.total}
+            theme={hud.theme}
+            minimap={hud.minimap}
+            enteredRooms={hud.enteredRooms}
           />
         )}
 

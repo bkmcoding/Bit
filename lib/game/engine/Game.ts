@@ -15,7 +15,9 @@ import {
   ROOM_THEME_PALETTES,
   type GameState,
   type Difficulty,
+  type RoomThemeId,
 } from '../utils/constants';
+import type { MinimapLayout } from '../rooms/roomData';
 import { Broodmother } from '../entities/enemies/Broodmother';
 import { hiveMindSteerUnit, type HiveRole } from '../systems/HiveMind';
 import { Vector2 } from '../utils/Vector2';
@@ -26,10 +28,19 @@ import { getMoonShaftForRoom } from '../rendering/roomMoonlight';
 import { AudioManager } from '../audio/AudioManager';
 import type { Upgrade } from '../upgrades/Upgrade';
 
+export type RoomHudPayload = {
+  current: number;
+  total: number;
+  theme: RoomThemeId;
+  minimap: MinimapLayout;
+  /** Rooms the player has entered this run (for radar fade). */
+  enteredRooms: number[];
+};
+
 export interface GameCallbacks {
   onStateChange?: (state: GameState) => void;
   onHealthChange?: (health: number, maxHealth: number) => void;
-  onRoomChange?: (roomIndex: number, totalRooms: number) => void;
+  onRoomChange?: (payload: RoomHudPayload) => void;
   onUpgradeSelect?: (upgrades: Upgrade[]) => void;
   onGameOver?: (victory: boolean) => void;
   /** WebGL post: native-res buffer → GPU. When set, Canvas horror overlay is skipped. */
@@ -60,9 +71,21 @@ export class Game {
 
   /** Drives low-HP pulse and subtle flicker in the post overlay. */
   private ambiencePhase: number = 0;
+  /** Seconds since run start; WebGL horror shader (warp / grain / rare jolts). */
+  private horrorTime: number = 0;
   private skitterCooldown: number = 0;
 
   private hiveMindRegistry: Map<Enemy, { i: number; n: number }> = new Map();
+
+  private static rollRunSeed(): number {
+    try {
+      const buf = new Uint32Array(1);
+      crypto.getRandomValues(buf);
+      return buf[0]! | 0;
+    } catch {
+      return (Math.random() * 0x1_0000_0000) | 0;
+    }
+  }
 
   constructor(ctx: CanvasRenderingContext2D, callbacks: GameCallbacks = {}) {
     this.ctx = ctx;
@@ -75,7 +98,7 @@ export class Game {
     
     // Create player at center of first room
     this.player = new Player(
-      new Vector2(GAME.NATIVE_WIDTH / 2, GAME.NATIVE_HEIGHT / 2),
+      new Vector2(GAME.BUFFER_WIDTH / 2, GAME.BUFFER_HEIGHT / 2),
       this
     );
   }
@@ -124,12 +147,13 @@ export class Game {
     this.projectiles = [];
     this.enemies = [];
     this.particles.clear();
-    this.roomManager.reset();
+    this.roomManager.rebuildRun(Game.rollRunSeed());
     this.player = new Player(
-      new Vector2(GAME.NATIVE_WIDTH / 2, GAME.NATIVE_HEIGHT / 2),
+      new Vector2(GAME.BUFFER_WIDTH / 2, GAME.BUFFER_HEIGHT / 2),
       this
     );
     this.applyDifficultyToPlayer(this.player);
+    this.horrorTime = 0;
   }
 
   private applyDifficultyToPlayer(player: Player): void {
@@ -189,10 +213,12 @@ export class Game {
 
     this.applyEnemySeparation(deltaTime);
 
-    // Update projectiles
+    const cr = this.roomManager.currentRoom;
+    const pBw = cr?.width ?? GAME.BUFFER_WIDTH;
+    const pBh = cr?.height ?? GAME.BUFFER_HEIGHT;
     for (const projectile of this.projectiles) {
       if (projectile.isActive) {
-        projectile.update(deltaTime);
+        projectile.update(deltaTime, pBw, pBh);
       }
     }
 
@@ -219,6 +245,7 @@ export class Game {
     }
 
     this.ambiencePhase += deltaTime;
+    this.horrorTime += deltaTime;
 
     this.updateEnemySkitter(deltaTime);
   }
@@ -258,8 +285,8 @@ export class Game {
     const room = this.roomManager.currentRoom;
     if (!room) return;
     const wt = room.wallThickness;
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = room.width;
+    const h = room.height;
     const strength = 108;
 
     for (const enemy of this.enemies) {
@@ -311,43 +338,62 @@ export class Game {
     }
 
     const room = this.roomManager.currentRoom;
-    ctx.fillStyle = room
-      ? ROOM_THEME_PALETTES[room.themeId].floor
-      : COLORS.FLOOR;
-    ctx.fillRect(0, 0, GAME.NATIVE_WIDTH, GAME.NATIVE_HEIGHT);
+    ctx.fillStyle = '#030203';
+    ctx.fillRect(0, 0, GAME.BUFFER_WIDTH, GAME.BUFFER_HEIGHT);
 
-    // Render current room
+    const rw = room?.width ?? GAME.BUFFER_WIDTH;
+    const rh = room?.height ?? GAME.BUFFER_HEIGHT;
+    const rox = Math.floor((GAME.BUFFER_WIDTH - rw) / 2);
+    const roy = Math.floor((GAME.BUFFER_HEIGHT - rh) / 2);
+    if (room) {
+      ctx.save();
+      ctx.translate(rox, roy);
+    }
+
     this.roomManager.render(ctx);
 
-    // Render enemies
     for (const enemy of this.enemies) {
       if (enemy.isActive) {
         enemy.render(ctx);
       }
     }
 
-    // Render projectiles
     for (const projectile of this.projectiles) {
       if (projectile.isActive) {
         projectile.render(ctx);
       }
     }
 
-    // Render player
     this.player.render(ctx);
 
-    // Render particles on top
     this.particles.render(ctx);
 
+    if (room) {
+      ctx.restore();
+    }
+
     ctx.restore();
+
+    if (this.callbacks.onPresentFrame && this.state !== 'MENU') {
+      const w = GAME.BUFFER_WIDTH;
+      const h = GAME.BUFFER_HEIGHT;
+      ctx.save();
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = 'rgba(34, 28, 48, 0.38)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
 
     if (this.callbacks.onPresentFrame) {
       const moon = getMoonShaftForRoom(this.roomManager.currentRoomIndex);
       const showFx = this.state !== 'MENU';
+      const cr = this.roomManager.currentRoom;
+      const uvw = cr?.width ?? GAME.BUFFER_WIDTH;
+      const uvh = cr?.height ?? GAME.BUFFER_HEIGHT;
       this.callbacks.onPresentFrame(this.ctx.canvas, {
-        time: performance.now() / 1000,
-        playerX: this.player.position.x / GAME.NATIVE_WIDTH,
-        playerY: this.player.position.y / GAME.NATIVE_HEIGHT,
+        time: this.horrorTime,
+        playerX: this.player.position.x / uvw,
+        playerY: this.player.position.y / uvh,
         reactiveMood: showFx ? 1 : 0,
         moonOriginX: moon.originX,
         moonOriginY: moon.originY,
@@ -361,26 +407,45 @@ export class Game {
     }
   }
 
-  /** Full-screen mood: cold wash, vignette, proximity dread, low-HP stress (not shaken). */
+  /** Dark + vignette + corner pools — no radial triangles (those read as a “star” on screen). */
   private renderHorrorOverlay(ctx: CanvasRenderingContext2D): void {
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = GAME.BUFFER_WIDTH;
+    const h = GAME.BUFFER_HEIGHT;
     const cx = w * 0.5;
     const cy = h * 0.5;
     const maxR = Math.hypot(cx, cy);
+    const t = this.ambiencePhase;
 
     ctx.save();
 
     ctx.globalCompositeOperation = 'multiply';
-    ctx.fillStyle = 'rgba(12, 10, 22, 0.58)';
+    ctx.fillStyle = 'rgba(14, 10, 24, 0.68)';
     ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+
+    ctx.globalCompositeOperation = 'multiply';
+    const cornerR = maxR * 0.72;
+    const corners = [
+      [0, 0],
+      [w, 0],
+      [0, h],
+      [w, h],
+    ] as const;
+    for (const [kx, ky] of corners) {
+      const gr = ctx.createRadialGradient(kx, ky, 0, kx, ky, cornerR);
+      gr.addColorStop(0, 'rgba(0,0,0,0.62)');
+      gr.addColorStop(0.45, 'rgba(0,0,0,0.22)');
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, 0, w, h);
+    }
     ctx.globalCompositeOperation = 'source-over';
 
     const lastRoom =
       this.roomManager.totalRooms > 0 &&
       this.roomManager.currentRoomIndex === this.roomManager.totalRooms - 1;
     if (lastRoom && this.state === 'PLAYING') {
-      ctx.fillStyle = 'rgba(48, 12, 18, 0.12)';
+      ctx.fillStyle = 'rgba(28, 2, 10, 0.38)';
       ctx.fillRect(0, 0, w, h);
     }
 
@@ -393,49 +458,43 @@ export class Game {
       const near = 200;
       if (d < near) threat += (near - d) / near;
     }
-    threat = Math.min(1, threat * 0.22);
+    threat = Math.min(1, threat * 0.28);
     if (threat > 0.02) {
-      const flicker = 0.04 * Math.sin(this.ambiencePhase * 6.2) * threat;
-      ctx.fillStyle = `rgba(22, 8, 32, ${threat * 0.14 + flicker})`;
+      ctx.fillStyle = `rgba(6, 0, 18, ${threat * 0.34})`;
       ctx.fillRect(0, 0, w, h);
     }
 
     const hpFrac =
       this.player.maxHealth > 0 ? this.player.health / this.player.maxHealth : 1;
     if (hpFrac < 0.38 && this.state === 'PLAYING') {
-      const pulse = 0.1 + 0.07 * Math.sin(this.ambiencePhase * 4.5);
-      const a = (1 - hpFrac / 0.38) * pulse;
-      ctx.fillStyle = `rgba(72, 4, 4, ${Math.min(0.38, a)})`;
+      const a = (1 - hpFrac / 0.38) * 0.32;
+      ctx.fillStyle = `rgba(40, 0, 8, ${Math.min(0.52, a)})`;
       ctx.fillRect(0, 0, w, h);
     }
 
-    const g = ctx.createRadialGradient(cx, cy, maxR * 0.15, cx, cy, maxR * 1.02);
+    const g = ctx.createRadialGradient(cx, cy, maxR * 0.06, cx, cy, maxR * 1.02);
     g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(0.65, 'rgba(0,0,0,0.48)');
-    g.addColorStop(1, 'rgba(0,0,0,0.9)');
+    g.addColorStop(0.32, 'rgba(0,0,0,0.62)');
+    g.addColorStop(0.58, 'rgba(0,0,0,0.86)');
+    g.addColorStop(1, 'rgba(0,0,0,0.97)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
     ctx.globalCompositeOperation = 'overlay';
-    ctx.fillStyle = 'rgba(8, 4, 12, 0.22)';
+    ctx.fillStyle = 'rgba(6, 2, 14, 0.32)';
     ctx.fillRect(0, 0, w, h);
     ctx.globalCompositeOperation = 'source-over';
 
-    const grain = 55 + Math.floor(25 * Math.sin(this.ambiencePhase * 2.1));
-    for (let i = 0; i < grain; i++) {
-      const gx = (Math.sin(this.ambiencePhase * 1.7 + i * 12.989) * 0.5 + 0.5) * w;
-      const gy = (Math.cos(this.ambiencePhase * 1.3 + i * 9.417) * 0.5 + 0.5) * h;
-      ctx.fillStyle = `rgba(0,0,0,${0.04 + (i % 5) * 0.02})`;
-      ctx.fillRect(Math.floor(gx), Math.floor(gy), 1, 1);
-    }
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = 'rgba(18, 12, 28, 0.42)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
 
-    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-    ctx.lineWidth = 1;
-    for (let y = 0; y < h; y += 2) {
-      ctx.beginPath();
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(w, y + 0.5);
-      ctx.stroke();
+    for (let i = 0; i < 72; i++) {
+      const gx = (i * 9973 + Math.floor(t * 3) * 13) % w;
+      const gy = (i * 7919 + Math.floor(t * 2) * 17) % h;
+      ctx.fillStyle = `rgba(0,0,0,${0.04 + (i % 7) * 0.018})`;
+      ctx.fillRect(gx, gy, 1, 1);
     }
 
     ctx.restore();
@@ -512,6 +571,23 @@ export class Game {
     return this.roomManager.currentRoom;
   }
 
+  /** Letterbox offset when drawing a smaller room in the fixed buffer. */
+  getRoomViewOffset(): { ox: number; oy: number } {
+    const room = this.roomManager.currentRoom;
+    if (!room) return { ox: 0, oy: 0 };
+    return {
+      ox: Math.floor((GAME.BUFFER_WIDTH - room.width) / 2),
+      oy: Math.floor((GAME.BUFFER_HEIGHT - room.height) / 2),
+    };
+  }
+
+  /** Mouse in room-local space (matches entity coordinates). */
+  getAimMousePosition(): Vector2 {
+    const { ox, oy } = this.getRoomViewOffset();
+    const m = this.input.getMousePosition();
+    return new Vector2(m.x - ox, m.y - oy);
+  }
+
   // Notify UI of health change
   notifyHealthChange(): void {
     this.callbacks.onHealthChange?.(this.player.health, this.player.maxHealth);
@@ -519,10 +595,14 @@ export class Game {
 
   // Notify UI of room change
   notifyRoomChange(): void {
-    this.callbacks.onRoomChange?.(
-      this.roomManager.currentRoomIndex,
-      this.roomManager.totalRooms
-    );
+    const room = this.roomManager.currentRoom;
+    this.callbacks.onRoomChange?.({
+      current: this.roomManager.currentRoomIndex,
+      total: this.roomManager.totalRooms,
+      theme: room?.themeId ?? 'cellar',
+      minimap: this.roomManager.minimapLayout,
+      enteredRooms: this.roomManager.getEnteredRoomsSnapshot(),
+    });
   }
 
   // Show upgrade selection
@@ -535,6 +615,7 @@ export class Game {
   applyUpgrade(upgrade: Upgrade): void {
     AudioManager.play('SFX_UPGRADE');
     upgrade.apply(this.player);
+    this.notifyHealthChange();
     this.setState('PLAYING');
   }
 

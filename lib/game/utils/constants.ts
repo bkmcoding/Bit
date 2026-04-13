@@ -1,10 +1,14 @@
 // Game rendering
 export const GAME = {
+  /** Legacy viewport size (pre–letterbox expansion). */
   NATIVE_WIDTH: 240,
   NATIVE_HEIGHT: 160,
+  /** Fixed 2D buffer; rooms are drawn letterboxed inside this area. */
+  BUFFER_WIDTH: 352,
+  BUFFER_HEIGHT: 208,
   SCALE: 4,
-  get DISPLAY_WIDTH() { return this.NATIVE_WIDTH * this.SCALE; },
-  get DISPLAY_HEIGHT() { return this.NATIVE_HEIGHT * this.SCALE; },
+  get DISPLAY_WIDTH() { return this.BUFFER_WIDTH * this.SCALE; },
+  get DISPLAY_HEIGHT() { return this.BUFFER_HEIGHT * this.SCALE; },
   FPS_TARGET: 60,
 } as const;
 
@@ -160,7 +164,7 @@ export const ENEMY = {
   BROODMOTHER: {
     size: 32,
     speed: 22,
-    health: 88,
+    health: 280,
     damage: 2,
     spawnCooldown: 4.0,
   },
@@ -168,8 +172,8 @@ export const ENEMY = {
 
 // Room settings
 export const ROOM = {
-  WIDTH: GAME.NATIVE_WIDTH,
-  HEIGHT: GAME.NATIVE_HEIGHT,
+  WIDTH: GAME.BUFFER_WIDTH,
+  HEIGHT: GAME.BUFFER_HEIGHT,
   WALL_THICKNESS: 8,
   DOOR_WIDTH: 24,
   DOOR_HEIGHT: 8,

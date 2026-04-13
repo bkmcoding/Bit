@@ -1,44 +1,60 @@
 import { PixelHeart } from './PixelHeart';
+import { RunRadar } from './RunRadar';
+import type { MinimapLayout } from '@/lib/game/rooms/roomData';
+import { PLAYER, type RoomThemeId } from '@/lib/game/utils/constants';
 
 interface GameUIProps {
   health: number;
   maxHealth: number;
   currentRoom: number;
   totalRooms: number;
+  theme: RoomThemeId;
+  minimap: MinimapLayout;
+  enteredRooms: number[];
 }
 
-export function GameUI({ health, maxHealth, currentRoom, totalRooms }: GameUIProps) {
+export function GameUI({
+  health,
+  maxHealth,
+  currentRoom,
+  totalRooms,
+  theme,
+  minimap,
+  enteredRooms,
+}: GameUIProps) {
   return (
     <div className="absolute inset-0 pointer-events-none">
-      {/* Health display */}
       <div
-        className="absolute top-4 left-4 flex gap-0.5 items-center"
+        className="absolute top-4 left-4 flex gap-0.5 items-center transition-opacity duration-200"
         role="status"
         aria-label={`Health ${health} of ${maxHealth}`}
+        key={`hp-${maxHealth}`}
       >
         {Array.from({ length: maxHealth }).map((_, i) => (
-          <PixelHeart key={i} filled={i < health} />
-        ))}
-      </div>
-
-      {/* Room indicator */}
-      <div className="absolute top-4 right-4 flex gap-1 opacity-90">
-        {Array.from({ length: totalRooms }).map((_, i) => (
-          <div
+          <PixelHeart
             key={i}
-            className="w-3 h-3 rounded-sm border"
-            style={{
-              backgroundColor:
-                i < currentRoom ? '#3d4a38' : i === currentRoom ? '#5c4030' : '#1c1818',
-              borderColor: i === currentRoom ? '#6b5040' : '#0f0c0c',
-              boxShadow:
-                i === currentRoom ? '0 0 6px rgba(90, 40, 30, 0.45)' : 'none',
-            }}
+            filled={i < health}
+            fromUpgrade={i >= PLAYER.MAX_HEALTH}
           />
         ))}
       </div>
 
-      {/* Controls hint (only in first room) */}
+      <div className="absolute top-4 right-4 flex flex-col items-end gap-1 opacity-[0.92]">
+        <RunRadar
+          theme={theme}
+          minimap={minimap}
+          currentRoom={currentRoom}
+          totalRooms={totalRooms}
+          enteredRooms={enteredRooms}
+        />
+        <div
+          className="text-[10px] font-mono tracking-widest"
+          style={{ color: 'rgba(140, 128, 118, 0.75)' }}
+        >
+          SECTOR {currentRoom + 1}/{totalRooms}
+        </div>
+      </div>
+
       {currentRoom === 0 && (
         <div
           className="absolute bottom-4 left-1/2 -translate-x-1/2 text-center px-4 py-2 rounded border"

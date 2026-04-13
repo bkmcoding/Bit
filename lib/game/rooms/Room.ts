@@ -8,7 +8,7 @@ import {
   type Direction,
   type RoomThemeId,
 } from '../utils/constants';
-import type { ObstacleRect } from '../utils/obstacleCollision';
+import { walkableGridToWallRects, type ObstacleRect } from '../utils/obstacleCollision';
 
 export interface SpawnPoint {
   position: Vector2;
@@ -45,6 +45,14 @@ export interface RoomConfig {
   theme?: RoomThemeId;
   /** Interior crates / pillars (native coords, inside walls). */
   obstacles?: RoomObstacleConfig[];
+  /** Room interior pixel size (defaults to full game viewport if omitted). */
+  width?: number;
+  height?: number;
+  /**
+   * When set, each cell is one 8×8 tile; `true` = walkable floor. Solid tiles render as
+   * walls and contribute collision (merged) plus any `obstacles` props.
+   */
+  walkableGrid?: boolean[][];
 }
 
 export class Room {
@@ -56,13 +64,30 @@ export class Room {
   public isBossRoom: boolean;
   public themeId: RoomThemeId;
   public obstacles: ObstacleRect[];
+  /** Crates / pillars only (not merged wall mass from `walkableGrid`). */
+  public propObstacles: ObstacleRect[];
+  /** Optional 8×8 tile walkability; `[ty][tx]`. */
+  public readonly walkableGrid: boolean[][] | null;
+  /** Playfield pixel width / height (room-local coordinates 0…width). */
+  public readonly width: number;
+  public readonly height: number;
 
   constructor(config: RoomConfig) {
     this.id = config.id;
+    this.width = config.width ?? GAME.BUFFER_WIDTH;
+    this.height = config.height ?? GAME.BUFFER_HEIGHT;
     this.spawns = config.spawns;
     this.isBossRoom = config.isBossRoom ?? false;
     this.themeId = config.theme ?? 'cellar';
-    this.obstacles = (config.obstacles ?? []).map((o) => ({ x: o.x, y: o.y, w: o.w, h: o.h }));
+    this.walkableGrid = config.walkableGrid ?? null;
+    const props = (config.obstacles ?? []).map((o) => ({ x: o.x, y: o.y, w: o.w, h: o.h }));
+    this.propObstacles = props;
+    if (this.walkableGrid) {
+      const walls = walkableGridToWallRects(this.walkableGrid, 8);
+      this.obstacles = [...walls, ...props];
+    } else {
+      this.obstacles = props;
+    }
     
     // Initialize doors
     for (const dir of config.doors) {
@@ -105,8 +130,8 @@ export class Room {
     width: number;
     height: number;
   } {
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = this.width;
+    const h = this.height;
     const dw = ROOM.DOOR_WIDTH;
     const dh = ROOM.DOOR_HEIGHT;
     const wt = this.wallThickness;
@@ -128,6 +153,30 @@ export class Room {
     return this.obstacles;
   }
 
+  /** Geometric center of walkable tiles, or bbox center when no grid. */
+  getSafeRoomCenter(): Vector2 {
+    if (!this.walkableGrid) {
+      return new Vector2(this.width / 2, this.height / 2);
+    }
+    const g = this.walkableGrid;
+    const th = g.length;
+    const tw = g[0]?.length ?? 0;
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (let ty = 0; ty < th; ty++) {
+      for (let tx = 0; tx < tw; tx++) {
+        if (g[ty][tx]) {
+          sx += tx * 8 + 4;
+          sy += ty * 8 + 4;
+          n++;
+        }
+      }
+    }
+    if (n === 0) return new Vector2(this.width / 2, this.height / 2);
+    return new Vector2(sx / n, sy / n);
+  }
+
   getDoorAt(position: Vector2): Door | null {
     for (const [direction, door] of this.doors) {
       const doorBounds = this.getDoorInteractionBounds(direction);
@@ -144,8 +193,8 @@ export class Room {
   }
 
   getDoorBounds(direction: Direction): { x: number; y: number; width: number; height: number } {
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = this.width;
+    const h = this.height;
     const dw = ROOM.DOOR_WIDTH;
     const dh = ROOM.DOOR_HEIGHT;
     const wt = this.wallThickness;
@@ -163,13 +212,12 @@ export class Room {
   }
 
   getPlayerSpawnPosition(fromDirection: Direction | null): Vector2 {
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = this.width;
+    const h = this.height;
     const offset = this.wallThickness + 15;
     
     if (!fromDirection) {
-      // Start of game, spawn in center
-      return new Vector2(w / 2, h / 2);
+      return this.getSafeRoomCenter();
     }
     
     // Spawn near the door we came from (opposite side)
@@ -186,10 +234,15 @@ export class Room {
   }
 
   render(ctx: CanvasRenderingContext2D): void {
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = this.width;
+    const h = this.height;
     const wt = this.wallThickness;
     const pal = ROOM_THEME_PALETTES[this.themeId];
+
+    if (this.walkableGrid) {
+      this.renderTileRoom(ctx, w, h, wt, pal);
+      return;
+    }
 
     ctx.fillStyle = pal.floor;
     ctx.fillRect(0, 0, w, h);
@@ -198,7 +251,7 @@ export class Room {
 
     this.renderAmbientDecor(ctx, w, h, wt, pal);
 
-    this.renderObstacles(ctx, pal);
+    this.renderObstaclesList(ctx, pal, this.propObstacles);
 
     ctx.fillStyle = pal.wall;
 
@@ -216,6 +269,76 @@ export class Room {
     }
 
     this.renderCornerWebs(ctx, pal);
+  }
+
+  private renderTileRoom(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    wt: number,
+    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+  ): void {
+    const g = this.walkableGrid!;
+    const th = g.length;
+    const tw = g[0]?.length ?? 0;
+    const ts = 8;
+
+    for (let ty = 0; ty < th; ty++) {
+      for (let tx = 0; tx < tw; tx++) {
+        const wx = tx * ts;
+        const wy = ty * ts;
+        const ok = g[ty][tx];
+        ctx.fillStyle = ok ? pal.floor : pal.wall;
+        ctx.fillRect(wx, wy, ts, ts);
+      }
+    }
+
+    this.renderTileFloorAccents(ctx, g, tw, th, pal);
+
+    ctx.fillStyle = pal.wallDark;
+    for (let ty = 0; ty < th; ty++) {
+      for (let tx = 0; tx < tw; tx++) {
+        if (g[ty][tx]) continue;
+        const wx = tx * ts;
+        const wy = ty * ts;
+        const up = ty > 0 && g[ty - 1][tx];
+        const left = tx > 0 && g[ty][tx - 1];
+        if (up) ctx.fillRect(wx, wy, ts, 1);
+        if (left) ctx.fillRect(wx, wy, 1, ts);
+      }
+    }
+
+    this.renderAmbientDecor(ctx, w, h, wt, pal);
+    this.renderObstaclesList(ctx, pal, this.propObstacles);
+
+    for (const [direction, door] of this.doors) {
+      this.renderDoor(ctx, direction, door.isOpen, pal);
+    }
+
+    this.renderCornerWebs(ctx, pal);
+  }
+
+  private renderTileFloorAccents(
+    ctx: CanvasRenderingContext2D,
+    g: boolean[][],
+    tw: number,
+    th: number,
+    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+  ): void {
+    ctx.save();
+    ctx.strokeStyle = pal.floorAccent;
+    ctx.globalAlpha = 0.18;
+    ctx.lineWidth = 0.5;
+    const step = 3;
+    for (let ty = 0; ty < th; ty += step) {
+      for (let tx = 0; tx < tw; tx += step) {
+        if (!g[ty]?.[tx]) continue;
+        const x = tx * 8;
+        const y = ty * 8;
+        ctx.strokeRect(x + 0.5, y + 0.5, 7, 7);
+      }
+    }
+    ctx.restore();
   }
 
   private renderFloorVariation(
@@ -269,11 +392,12 @@ export class Room {
     ctx.restore();
   }
 
-  private renderObstacles(
+  private renderObstaclesList(
     ctx: CanvasRenderingContext2D,
-    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId]
+    pal: (typeof ROOM_THEME_PALETTES)[RoomThemeId],
+    list: ObstacleRect[]
   ): void {
-    for (const o of this.obstacles) {
+    for (const o of list) {
       ctx.fillStyle = pal.obstacle;
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.fillStyle = pal.obstacleTop;
@@ -541,7 +665,7 @@ export class Room {
     ctx.stroke();
     
     // Top-right corner
-    const w = GAME.NATIVE_WIDTH;
+    const w = this.width;
     ctx.beginPath();
     ctx.moveTo(w - wt, wt);
     ctx.lineTo(w - wt - webSize, wt);

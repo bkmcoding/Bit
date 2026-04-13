@@ -1,6 +1,6 @@
 import { Entity } from '../Entity';
 import { Vector2 } from '../../utils/Vector2';
-import { COLLISION_LAYER, COLORS, GAME, HIVE_MIND_HARD } from '../../utils/constants';
+import { COLLISION_LAYER, COLORS, HIVE_MIND_HARD } from '../../utils/constants';
 import type { HiveRole } from '../../systems/HiveMind';
 import { resolveCircleObstacles } from '../../utils/obstacleCollision';
 import { AudioManager } from '../../audio/AudioManager';
@@ -51,9 +51,9 @@ export abstract class Enemy extends Entity {
     if (room) {
       const halfSize = this.size / 2;
       const minX = room.wallThickness + halfSize;
-      const maxX = GAME.NATIVE_WIDTH - room.wallThickness - halfSize;
+      const maxX = room.width - room.wallThickness - halfSize;
       const minY = room.wallThickness + halfSize;
-      const maxY = GAME.NATIVE_HEIGHT - room.wallThickness - halfSize;
+      const maxY = room.height - room.wallThickness - halfSize;
       
       this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
       this.position.y = Math.max(minY, Math.min(maxY, this.position.y));

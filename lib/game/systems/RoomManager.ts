@@ -1,6 +1,6 @@
 import type { Game } from '../engine/Game';
 import { Room } from '../rooms/Room';
-import { ROOM_CONFIGS, ROOM_CONNECTIONS } from '../rooms/roomData';
+import { buildRunRooms, ROOM_COUNT, type MinimapLayout } from '../rooms/roomData';
 import { Spider } from '../entities/enemies/Spider';
 import { Spitter } from '../entities/enemies/Spitter';
 import { Dasher } from '../entities/enemies/Dasher';
@@ -10,7 +10,6 @@ import { Brute } from '../entities/enemies/Brute';
 import { Skitter } from '../entities/enemies/Skitter';
 import { Widow } from '../entities/enemies/Widow';
 import {
-  GAME,
   DIFFICULTY_SETTINGS,
   SPAWN_PROTECTION_MIN_SEC,
   type Direction,
@@ -23,35 +22,53 @@ import { AudioManager } from '../audio/AudioManager';
 export class RoomManager {
   public currentRoom: Room | null = null;
   public currentRoomIndex: number = 0;
-  public totalRooms: number = ROOM_CONFIGS.length;
+  public totalRooms: number = ROOM_COUNT;
+  /** 2D layout for the HUD radar (rebuilt each run). */
+  public minimapLayout: MinimapLayout = { positions: [], edges: [] };
 
   private game: Game;
   private rooms: Map<number, Room> = new Map();
   private visitedRooms: Set<number> = new Set();
+  /** Chambers the player has stepped into (for HUD radar). */
+  private enteredRooms: Set<number> = new Set();
   private lastDirection: Direction | null = null;
 
   constructor(game: Game) {
     this.game = game;
-    this.initializeRooms();
+    this.rebuildRun(0x71b1e71d);
   }
 
-  private initializeRooms(): void {
-    for (const config of ROOM_CONFIGS) {
-      const room = new Room(config);
+  /** New dungeon geometry, doors, and procedural rooms (call at start of each run). */
+  rebuildRun(runSeed: number): void {
+    const { configs, connections, minimap } = buildRunRooms(runSeed);
+    this.minimapLayout = minimap;
+    this.totalRooms = configs.length;
+    this.rooms.clear();
+    this.visitedRooms.clear();
+    this.enteredRooms.clear();
+    this.currentRoom = null;
+    this.currentRoomIndex = 0;
+    this.lastDirection = null;
 
-      const connections = ROOM_CONNECTIONS.get(config.id);
-      if (connections) {
-        for (const [dir, targetRoom] of connections) {
+    for (const config of configs) {
+      const room = new Room(config);
+      const conn = connections.get(config.id);
+      if (conn) {
+        for (const [dir, targetRoom] of conn) {
           room.setDoorTarget(dir as Direction, targetRoom);
         }
       }
-
       this.rooms.set(config.id, room);
     }
   }
 
+  getEnteredRoomsSnapshot(): number[] {
+    return Array.from(this.enteredRooms).sort((a, b) => a - b);
+  }
+
   reset(): void {
     this.visitedRooms.clear();
+    this.enteredRooms.clear();
     this.currentRoom = null;
     this.currentRoomIndex = 0;
     this.lastDirection = null;
@@ -100,6 +117,7 @@ export class RoomManager {
       room.openDoors();
     }
 
+    this.enteredRooms.add(roomIndex);
     this.game.notifyRoomChange();
 
     if (this.game.state === 'PLAYING') {
@@ -122,18 +140,19 @@ export class RoomManager {
 
   private clampPointToPlayfield(p: Vector2, half: number, room: Room): void {
     const wt = room.wallThickness;
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = room.width;
+    const h = room.height;
     p.x = Math.max(wt + half, Math.min(w - wt - half, p.x));
     p.y = Math.max(wt + half, Math.min(h - wt - half, p.y));
   }
 
   /** Prefer a spot far from enemies, inside the room, and not inside crates/pillars. */
   private findBestPlayerSpawnPosition(room: Room, doorSpawn: Vector2): Vector2 {
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
-    const cx = w / 2;
-    const cy = h / 2;
+    const w = room.width;
+    const h = room.height;
+    const safe = room.getSafeRoomCenter();
+    const cx = safe.x;
+    const cy = safe.y;
     const obs = room.getObstacleRects();
     const ph = this.game.player.size / 2;
 
@@ -185,8 +204,8 @@ export class RoomManager {
     const room = this.currentRoom;
     if (!room) return;
     const wt = room.wallThickness;
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = room.width;
+    const h = room.height;
 
     for (let iter = 0; iter < 14; iter++) {
       for (let i = 0; i < this.game.enemies.length; i++) {
@@ -258,8 +277,8 @@ export class RoomManager {
     if (!room) return;
     const half = this.game.player.size / 2;
     const wt = room.wallThickness;
-    const w = GAME.NATIVE_WIDTH;
-    const h = GAME.NATIVE_HEIGHT;
+    const w = room.width;
+    const h = room.height;
     const p = this.game.player.position;
     p.x = Math.max(wt + half, Math.min(w - wt - half, p.x));
     p.y = Math.max(wt + half, Math.min(h - wt - half, p.y));
@@ -311,6 +330,7 @@ export class RoomManager {
     };
     this.lastDirection = oppositeDirections[fromDirection];
 
+    AudioManager.play('SFX_DOOR_PASS', 0.88);
     this.loadRoom(roomIndex);
   }
 

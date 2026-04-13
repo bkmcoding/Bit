@@ -42,7 +42,7 @@ export class Projectile extends Entity {
     this.velocity = options.direction.normalize().mul(speed);
   }
 
-  update(deltaTime: number): void {
+  update(deltaTime: number, roomWidth: number = GAME.BUFFER_WIDTH, roomHeight: number = GAME.BUFFER_HEIGHT): void {
     // Move
     this.position.addMut(this.velocity.mul(deltaTime));
     
@@ -53,12 +53,12 @@ export class Projectile extends Entity {
       return;
     }
     
-    // Check bounds
+    // Check bounds (room-local coordinates)
     if (
       this.position.x < 0 ||
-      this.position.x > GAME.NATIVE_WIDTH ||
+      this.position.x > roomWidth ||
       this.position.y < 0 ||
-      this.position.y > GAME.NATIVE_HEIGHT
+      this.position.y > roomHeight
     ) {
       this.destroy();
     }

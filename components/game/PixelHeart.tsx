@@ -12,7 +12,22 @@ const W = PIXEL_HEART[0].length;
 const H = PIXEL_HEART.length;
 const SCALE = 3;
 
-export function PixelHeart({ filled }: { filled: boolean }) {
+export function PixelHeart({
+  filled,
+  fromUpgrade,
+}: {
+  filled: boolean;
+  /** Hearts beyond the base max (upgrade-granted) use a distinct hue. */
+  fromUpgrade?: boolean;
+}) {
+  const fill = filled
+    ? fromUpgrade
+      ? '#7a4488'
+      : '#5a2428'
+    : fromUpgrade
+      ? '#2a1e2e'
+      : '#1c181a';
+
   return (
     <svg
       width={W * SCALE}
@@ -37,7 +52,7 @@ export function PixelHeart({ filled }: { filled: boolean }) {
               y={y}
               width={1}
               height={1}
-              fill={filled ? '#5a2428' : '#1c181a'}
+              fill={fill}
             />
           );
         })

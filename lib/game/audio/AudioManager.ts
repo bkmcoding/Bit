@@ -58,6 +58,8 @@ export const AUDIO_PATHS = {
   SFX_ENEMY_DEATH: '/audio/sfx/enemy-death.mp3',
   SFX_PLAYER_HURT: '/audio/sfx/player-hurt.mp3',
   SFX_DOOR_OPEN: '/audio/sfx/door-open.mp3',
+  /** Walking through a doorway (optional `door-pass.mp3`; falls back to door-open clip). */
+  SFX_DOOR_PASS: '/audio/sfx/door-pass.mp3',
   SFX_UPGRADE: '/audio/sfx/upgrade.mp3',
   SFX_VICTORY: '/audio/sfx/victory.mp3',
   SFX_GAME_OVER: '/audio/sfx/game-over.mp3',
@@ -216,6 +218,7 @@ class AudioManagerClass {
       AUDIO_PATHS.SFX_ENEMY_DEATH,
       AUDIO_PATHS.SFX_PLAYER_HURT,
       AUDIO_PATHS.SFX_DOOR_OPEN,
+      AUDIO_PATHS.SFX_DOOR_PASS,
       AUDIO_PATHS.SFX_UPGRADE,
       ...AMBIENCE_SEARCH_PATHS.whiteNoise,
       ...AMBIENCE_SEARCH_PATHS.cave,
@@ -265,8 +268,11 @@ class AudioManagerClass {
     this.ensureAudioContextRunning();
 
     const path = AUDIO_PATHS[effect];
-    const buffer = this.sounds.get(path);
-    
+    let buffer = this.sounds.get(path);
+    if (!buffer && effect === 'SFX_DOOR_PASS') {
+      buffer = this.sounds.get(AUDIO_PATHS.SFX_DOOR_OPEN);
+    }
+
     if (buffer && this.audioContext) {
       this.playBuffer(buffer, volume * this.settings.sfxVolume * this.settings.masterVolume);
     } else {
@@ -355,6 +361,16 @@ class AudioManagerClass {
         gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
         oscillator.start(now);
         oscillator.stop(now + 0.2);
+        break;
+
+      case 'SFX_DOOR_PASS':
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(155, now);
+        oscillator.frequency.exponentialRampToValueAtTime(48, now + 0.12);
+        gainNode.gain.setValueAtTime(vol * 0.75, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.16);
+        oscillator.start(now);
+        oscillator.stop(now + 0.16);
         break;
         
       case 'SFX_UPGRADE':

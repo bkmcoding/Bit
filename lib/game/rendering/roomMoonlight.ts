@@ -1,4 +1,4 @@
-import { ROOM_CONFIGS } from '../rooms/roomData';
+import { ROOM_COUNT } from '../rooms/roomData';
 
 /**
  * Per-room “window” moon shaft in normalized game UV (0–1).
@@ -37,9 +37,9 @@ const RAW: RoomMoonShaftConfig[] = [
   { originX: 0.22, originY: 0.14, dirX: 0.55, dirY: 0.78, spread: 0.18, strength: 0.42 },
 ];
 
-if (RAW.length !== ROOM_CONFIGS.length) {
+if (RAW.length !== ROOM_COUNT) {
   console.error(
-    `[roomMoonlight] expected ${ROOM_CONFIGS.length} moon shafts, have ${RAW.length} — fix RAW or room list`
+    `[roomMoonlight] expected ${ROOM_COUNT} moon shafts, have ${RAW.length} — fix RAW or room list`
   );
 }
 

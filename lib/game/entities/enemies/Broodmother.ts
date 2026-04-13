@@ -2,7 +2,7 @@ import { Enemy } from './Enemy';
 import { Spider } from './Spider';
 import { Projectile } from '../Projectile';
 import { Vector2 } from '../../utils/Vector2';
-import { ENEMY, COLORS, GAME } from '../../utils/constants';
+import { ENEMY, COLORS } from '../../utils/constants';
 import { resolveCircleObstacles } from '../../utils/obstacleCollision';
 import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
@@ -25,6 +25,24 @@ export class Broodmother extends Enemy {
   constructor(position: Vector2, game: Game) {
     super(position, ENEMY.BROODMOTHER, game);
     AudioManager.play('SFX_BOSS_ROAR');
+  }
+
+  /** Brood shield: no HP damage while any of her spiders are alive. */
+  private broodSpiderCount(): number {
+    return this.game.enemies.filter(
+      (e) => e instanceof Spider && e.isActive && !e.markedForDeletion
+    ).length;
+  }
+
+  takeDamage(amount: number): void {
+    if (this.broodSpiderCount() > 0) {
+      this.flashTimer = 0.12;
+      AudioManager.play('SFX_ENEMY_HIT');
+      this.game.particles.emit(this.position, '#7ae8ff', 7, 52);
+      this.game.shake(2);
+      return;
+    }
+    super.takeDamage(amount);
   }
 
   private getLifeStage(): 1 | 2 {
@@ -76,9 +94,7 @@ export class Broodmother extends Enemy {
 
     this.phaseTimer -= deltaTime;
 
-    const currentChildren = this.game.enemies.filter(
-      e => e instanceof Spider && e.isActive && !e.markedForDeletion
-    ).length;
+    const currentChildren = this.broodSpiderCount();
 
     if (this.phaseTimer <= 0) {
       this.nextPhase(currentChildren);
@@ -119,9 +135,9 @@ export class Broodmother extends Enemy {
     if (room) {
       const halfSize = this.size / 2;
       const minX = room.wallThickness + halfSize;
-      const maxX = GAME.NATIVE_WIDTH - room.wallThickness - halfSize;
+      const maxX = room.width - room.wallThickness - halfSize;
       const minY = room.wallThickness + halfSize;
-      const maxY = GAME.NATIVE_HEIGHT - room.wallThickness - halfSize;
+      const maxY = room.height - room.wallThickness - halfSize;
 
       this.position.x = Math.max(minX, Math.min(maxX, this.position.x));
       this.position.y = Math.max(minY, Math.min(maxY, this.position.y));
@@ -316,6 +332,18 @@ export class Broodmother extends Enemy {
     const hx = -barWidth / 2;
     const healthPercent = this.health / this.maxHealth;
     const midX = hx + barWidth * STAGE2_THRESHOLD;
+    const shielded = this.broodSpiderCount() > 0;
+
+    if (shielded) {
+      const sy = barY - 8;
+      ctx.fillStyle = 'rgba(12, 28, 42, 0.95)';
+      ctx.fillRect(hx, sy, barWidth, 4);
+      ctx.fillStyle = 'rgba(60, 200, 255, 0.35)';
+      ctx.fillRect(hx, sy, barWidth, 4);
+      ctx.strokeStyle = 'rgba(160, 240, 255, 0.75)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(hx + 0.5, sy + 0.5, barWidth - 1, 3);
+    }
 
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(hx, barY, barWidth, barHeight);
