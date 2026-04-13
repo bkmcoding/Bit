@@ -78,11 +78,11 @@ export class InputManager {
     if (!this.canvas) return;
     
     const rect = this.canvas.getBoundingClientRect();
-    // Convert screen coordinates to game coordinates (accounting for scale)
-    this.mousePosition.set(
-      (e.clientX - rect.left) / GAME.SCALE,
-      (e.clientY - rect.top) / GAME.SCALE
-    );
+    // Convert screen coordinates to *buffer* game coordinates (352x208).
+    // This stays correct even if the canvas is CSS-scaled to fit the viewport.
+    const sx = rect.width / GAME.BUFFER_WIDTH;
+    const sy = rect.height / GAME.BUFFER_HEIGHT;
+    this.mousePosition.set((e.clientX - rect.left) / sx, (e.clientY - rect.top) / sy);
   }
 
   private handleMouseDown(e: MouseEvent): void {

@@ -81,9 +81,10 @@ void main() {
   if (mood < 0.5) {
     vec2 tc = vec2(uv.x, 1.0 - uv.y);
     col = tap(tc);
-    col *= 0.9;
     vec2 qv = uv - 0.5;
-    float vig = clamp(1.0 - dot(qv, qv) * 0.55, 0.78, 1.0);
+    // Keep the menu/title pass readable (less shadow crush).
+    col *= 0.98;
+    float vig = clamp(1.0 - dot(qv, qv) * 0.45, 0.86, 1.0);
     col *= vig;
   } else {
   float M = mood;
@@ -95,26 +96,27 @@ void main() {
 
   float dCr = min(min(length(tc0), length(tc0 - vec2(1.0, 0.0))),
                   min(length(tc0 - vec2(0.0, 1.0)), length(tc0 - vec2(1.0, 1.0))));
-  float cornerSh = mix(0.4, 1.0, smoothstep(0.012, 0.36, dCr));
+  float cornerSh = mix(0.55, 1.0, smoothstep(0.012, 0.36, dCr));
   col *= cornerSh;
 
   float breathe = 0.96 + 0.04 * sin(t * 0.55 + ql * 1.8);
-  float vigAmt = 1.22 * M * breathe;
-  float vigFloor = 0.045;
+  float vigAmt = 0.92 * M * breathe;
+  float vigFloor = 0.12;
   float vig = clamp(1.0 - dot(q, q) * vigAmt, vigFloor, 1.0);
   col *= vig;
 
   float peak = max(max(col.r, col.g), col.b);
   float inShadow = 1.0 - smoothstep(0.04, 0.28, peak);
-  col *= mix(1.0, 0.52, inShadow * M);
+  col *= mix(1.0, 0.7, inShadow * M);
 
   vec3 sick = col * vec3(0.82, 0.88, 0.74);
   vec3 bruise = col * vec3(0.76, 0.72, 0.86);
   col = mix(col, sick, 0.12 * M);
   col = mix(col, bruise, 0.1 * M);
-  col *= 0.68 * M + (1.0 - M);
+  // Global lift so gameplay details survive on typical displays.
+  col *= 0.85 * M + (1.0 - M);
 
-  col = pow(max(col, vec3(0.0005)), vec3(1.07));
+  col = pow(max(col, vec3(0.0005)), vec3(1.02));
 
   float rf = hash21(uv * 350.0 + floor(t * 3.5));
   if (rf > 0.996) col *= 0.5;
@@ -141,7 +143,7 @@ void main() {
   float g = hash21(floor(scr * 0.5) + floor(t * 0.9));
   col += (g - 0.5) * 0.014 * M;
 
-  col *= 1.0;
+  col *= 1.05;
   }
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }

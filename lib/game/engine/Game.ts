@@ -379,7 +379,8 @@ export class Game {
       const h = GAME.BUFFER_HEIGHT;
       ctx.save();
       ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = 'rgba(34, 28, 48, 0.38)';
+      // Gentle toning only; avoid crushing midtones (the WebGL pass already vignettes).
+      ctx.fillStyle = 'rgba(34, 28, 48, 0.18)';
       ctx.fillRect(0, 0, w, h);
       ctx.restore();
     }
@@ -419,7 +420,7 @@ export class Game {
     ctx.save();
 
     ctx.globalCompositeOperation = 'multiply';
-    ctx.fillStyle = 'rgba(14, 10, 24, 0.68)';
+    ctx.fillStyle = 'rgba(14, 10, 24, 0.52)';
     ctx.fillRect(0, 0, w, h);
     ctx.globalCompositeOperation = 'source-over';
 
@@ -433,8 +434,8 @@ export class Game {
     ] as const;
     for (const [kx, ky] of corners) {
       const gr = ctx.createRadialGradient(kx, ky, 0, kx, ky, cornerR);
-      gr.addColorStop(0, 'rgba(0,0,0,0.62)');
-      gr.addColorStop(0.45, 'rgba(0,0,0,0.22)');
+      gr.addColorStop(0, 'rgba(0,0,0,0.45)');
+      gr.addColorStop(0.45, 'rgba(0,0,0,0.16)');
       gr.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = gr;
       ctx.fillRect(0, 0, w, h);
@@ -474,9 +475,9 @@ export class Game {
 
     const g = ctx.createRadialGradient(cx, cy, maxR * 0.06, cx, cy, maxR * 1.02);
     g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(0.32, 'rgba(0,0,0,0.62)');
-    g.addColorStop(0.58, 'rgba(0,0,0,0.86)');
-    g.addColorStop(1, 'rgba(0,0,0,0.97)');
+    g.addColorStop(0.32, 'rgba(0,0,0,0.52)');
+    g.addColorStop(0.58, 'rgba(0,0,0,0.78)');
+    g.addColorStop(1, 'rgba(0,0,0,0.9)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 

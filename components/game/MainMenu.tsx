@@ -476,7 +476,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
         </div>
 
         <div
-          className={`main-menu-setup-scroll absolute inset-0 flex min-h-0 flex-col items-center gap-5 overflow-y-auto overflow-x-hidden px-4 pb-6 transition-opacity ease-in-out ${
+          className={`main-menu-setup-scroll absolute inset-0 flex min-h-0 flex-col items-center justify-center gap-5 overflow-y-auto overflow-x-hidden px-4 py-10 transition-opacity ease-in-out ${
             phase === 'setup' ? 'pointer-events-auto z-20' : 'pointer-events-none z-10'
           }`}
           style={{
