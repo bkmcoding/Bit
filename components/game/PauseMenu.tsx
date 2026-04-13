@@ -1,5 +1,7 @@
 'use client'
 
+import { useEffect, useState } from 'react'
+import { AudioManager } from '@/lib/game/audio/AudioManager'
 import { MenuBackdrop, MenuWebSilhouette, MenuPanel, MenuBtn, MENU } from '@/components/game/menuTheme'
 
 interface PauseMenuProps {
@@ -11,6 +13,15 @@ interface PauseMenuProps {
 const mono = { fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", monospace' } as const
 
 export function PauseMenu({ onResume, onRestart, onMainMenu }: PauseMenuProps) {
+  const [musicPct, setMusicPct] = useState(50)
+  const [sfxPct, setSfxPct] = useState(80)
+
+  useEffect(() => {
+    const s = AudioManager.getSettings()
+    setMusicPct(Math.round(s.musicVolume * 100))
+    setSfxPct(Math.round(s.sfxVolume * 100))
+  }, [])
+
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center">
       <MenuBackdrop />
@@ -37,7 +48,56 @@ export function PauseMenu({ onResume, onRestart, onMainMenu }: PauseMenuProps) {
           Still
         </h2>
 
-        <MenuPanel className="flex w-[min(100%,280px)] flex-col gap-3 py-6">
+        <MenuPanel className="flex w-[min(100%,280px)] flex-col gap-4 py-6">
+          <div className="w-full space-y-3 border-b pb-4" style={{ borderColor: MENU.rim }}>
+            <p
+              className="text-[10px] uppercase tracking-[0.35em]"
+              style={{ color: MENU.whisper, ...mono }}
+            >
+              Audio
+            </p>
+            <label className="block space-y-1.5">
+              <span className="flex justify-between text-[10px] uppercase tracking-[0.2em]" style={{ color: MENU.boneDim, ...mono }}>
+                <span>Music</span>
+                <span>{musicPct}%</span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={musicPct}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  setMusicPct(v)
+                  AudioManager.setMusicVolume(v / 100)
+                }}
+                className="h-2 w-full cursor-pointer"
+                style={{ accentColor: MENU.blood }}
+                aria-label="Music volume"
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className="flex justify-between text-[10px] uppercase tracking-[0.2em]" style={{ color: MENU.boneDim, ...mono }}>
+                <span>Game sounds</span>
+                <span>{sfxPct}%</span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={sfxPct}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  setSfxPct(v)
+                  AudioManager.setSfxVolume(v / 100)
+                }}
+                className="h-2 w-full cursor-pointer"
+                style={{ accentColor: MENU.blood }}
+                aria-label="Game sounds volume"
+              />
+            </label>
+          </div>
+
           <MenuBtn variant="primary" onClick={onResume} className="w-full py-3.5">
             Resume
           </MenuBtn>

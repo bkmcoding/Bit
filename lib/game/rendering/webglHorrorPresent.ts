@@ -142,9 +142,12 @@ void main() {
   float fl = 0.022 * sin(u_time * 6.5) + 0.012 * sin(u_time * 12.0);
   col *= 1.0 - fl;
 
-  // Very light CRT: every other scanline + faint phosphor (no rolling band)
-  float line = mod(gl_FragCoord.y, 2.0);
-  col *= 1.0 - line * 0.028;
+  // TV scanlines (full frame: title, gameplay, pause — anything through this pass)
+  float py = gl_FragCoord.y;
+  float oddRow = step(0.5, mod(py, 2.0));
+  float triple = step(0.5, mod(py, 3.0));
+  float scanMul = mix(0.9, 1.0, oddRow) * mix(0.965, 1.0, triple);
+  col *= scanMul;
 
   float ph = mod(gl_FragCoord.x + gl_FragCoord.y * 0.5, 3.0);
   vec3 mask = ph < 1.0 ? vec3(1.015, 0.992, 0.992) : (ph < 2.0 ? vec3(0.992, 1.012, 0.992) : vec3(0.992, 0.992, 1.015));

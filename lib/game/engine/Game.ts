@@ -429,7 +429,7 @@ export class Game {
       ctx.fillRect(Math.floor(gx), Math.floor(gy), 1, 1);
     }
 
-    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
     ctx.lineWidth = 1;
     for (let y = 0; y < h; y += 2) {
       ctx.beginPath();

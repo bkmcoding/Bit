@@ -140,6 +140,10 @@ class AudioManagerClass {
   private menuTvStaticSource: AudioBufferSourceNode | null = null;
   private menuTvStaticGain: GainNode | null = null;
   private menuTvStaticStopTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Quiet AC / flyback-style buzz under menu (stays with music until gameplay). */
+  private menuTvBuzz: { gain: GainNode; oscillators: OscillatorNode[] } | null = null;
+  /** Next MUSIC_GAME / MUSIC_BOSS Web Audio gain ramps from 0 (after leaving main menu). */
+  private pendingGameplayMusicFadeInMs: number | null = null;
 
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
@@ -247,10 +251,19 @@ class AudioManagerClass {
     }
   }
 
+  /** Web Audio may be suspended after long async gaps; resume before output. */
+  private ensureAudioContextRunning(): void {
+    if (!this.audioContext || this.audioContext.state === 'closed') return;
+    if (this.audioContext.state !== 'running') {
+      void this.audioContext.resume().catch(() => undefined);
+    }
+  }
+
   // Play a sound effect
   play(effect: SoundEffect, volume: number = 1): void {
     if (this.settings.muted || !this.isInitialized) return;
-    
+    this.ensureAudioContextRunning();
+
     const path = AUDIO_PATHS[effect];
     const buffer = this.sounds.get(path);
     
@@ -435,6 +448,13 @@ class AudioManagerClass {
    */
   private shouldKeepCurrentMusicTrack(track: MusicTrack): boolean {
     if (this.currentMusicTrack !== track) return false;
+    /** Avoid “horror-only” stub: missing buffer + horror used to skip rebuilding the loop. */
+    if (
+      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS') &&
+      this.currentMusic === null
+    ) {
+      return false;
+    }
     if (track === 'MUSIC_MENU' && this.menuHtmlActive) return true;
     if (this.currentMusic !== null) return true;
     if (
@@ -547,6 +567,72 @@ class AudioManagerClass {
     src.start(0);
     this.menuTvStaticSource = src;
     this.menuTvStaticGain = g;
+    this.startMenuTvBuzz();
+  }
+
+  private stopMenuTvBuzz(): void {
+    if (!this.menuTvBuzz) return;
+    for (const o of this.menuTvBuzz.oscillators) {
+      try {
+        o.stop();
+      } catch {
+        // ignore
+      }
+      try {
+        o.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      this.menuTvBuzz.gain.disconnect();
+    } catch {
+      // ignore
+    }
+    this.menuTvBuzz = null;
+  }
+
+  /**
+   * Low CRT-style hum/buzz (60 Hz family + harmonics). Idempotent if already running.
+   * Stops when leaving the menu (gameplay music) or on full `stopMusic`.
+   */
+  startMenuTvBuzz(): void {
+    if (!this.audioContext || !this.isInitialized) return;
+    if (this.settings.muted) return;
+    if (this.menuTvBuzz) return;
+
+    const ctx = this.audioContext;
+    const g = ctx.createGain();
+    this.updateMenuTvBuzzGainNode(g);
+
+    const freqs = [120, 60, 180];
+    const types: OscillatorType[] = ['triangle', 'sine', 'triangle'];
+    const oscillators: OscillatorNode[] = [];
+    for (let i = 0; i < freqs.length; i++) {
+      const o = ctx.createOscillator();
+      o.type = types[i];
+      o.frequency.value = freqs[i];
+      o.detune.value = (i - 1) * 1.2;
+      o.connect(g);
+      oscillators.push(o);
+    }
+    g.connect(ctx.destination);
+    for (const o of oscillators) {
+      o.start(0);
+    }
+    this.menuTvBuzz = { gain: g, oscillators };
+  }
+
+  private updateMenuTvBuzzGainNode(gainNode: GainNode): void {
+    if (!this.audioContext) return;
+    const v = this.settings.muted ? 0 : 0.012 * this.settings.masterVolume;
+    gainNode.gain.setValueAtTime(v, this.audioContext.currentTime);
+  }
+
+  private refreshMenuTvBuzzVolume(): void {
+    if (!this.menuTvBuzz?.gain || !this.audioContext) return;
+    const v = this.settings.muted ? 0 : 0.012 * this.settings.masterVolume;
+    this.menuTvBuzz.gain.gain.setValueAtTime(v, this.audioContext.currentTime);
   }
 
   /** Next menu music playback starts at zero volume/gain for a crossfade from TV static. */
@@ -693,6 +779,96 @@ class AudioManagerClass {
     return false;
   }
 
+  /** Call before `Game.start()` so the first gameplay/boss track fades in instead of stepping. */
+  scheduleGameplayMusicFadeIn(ms: number): void {
+    this.pendingGameplayMusicFadeInMs = Math.max(0, ms);
+  }
+
+  /**
+   * Fade out menu HTML music, TV buzz, and Web Audio menu buffer; clears menu track state.
+   * Call before starting a run so `playMusic(MUSIC_GAME)` does not cut menu audio abruptly.
+   */
+  async fadeOutMenuAtmosphereForGameplay(durationMs: number): Promise<void> {
+    const ms = Math.max(280, durationMs);
+    this.cancelMenuHtmlVolumeRamp();
+
+    const ctx = this.audioContext;
+    if (ctx) {
+      const t0 = ctx.currentTime;
+      const durSec = ms / 1000;
+      if (this.menuTvBuzz?.gain) {
+        const g = this.menuTvBuzz.gain.gain;
+        const v = Math.max(1e-4, g.value);
+        g.cancelScheduledValues(t0);
+        g.setValueAtTime(v, t0);
+        g.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+      }
+      if (this.menuTvStaticGain) {
+        const g = this.menuTvStaticGain.gain;
+        const v = Math.max(1e-4, g.value);
+        g.cancelScheduledValues(t0);
+        g.setValueAtTime(v, t0);
+        g.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+      }
+      if (this.currentMusicGain && this.currentMusicTrack === 'MUSIC_MENU') {
+        const g = this.currentMusicGain.gain;
+        const v = Math.max(1e-4, g.value);
+        g.cancelScheduledValues(t0);
+        g.setValueAtTime(v, t0);
+        g.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+      }
+    }
+
+    const htmlEl = this.menuHtmlAudio;
+    const htmlStart = htmlEl && this.menuHtmlActive ? htmlEl.volume : 0;
+    const tStart = performance.now();
+    await new Promise<void>((resolve) => {
+      const step = () => {
+        const elapsed = performance.now() - tStart;
+        const u = Math.min(1, elapsed / ms);
+        if (htmlEl && this.menuHtmlActive) {
+          htmlEl.volume = htmlStart * (1 - u);
+        }
+        if (u < 1) {
+          requestAnimationFrame(step);
+        } else {
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
+
+    await new Promise<void>((r) => setTimeout(r, 40));
+
+    this.stopMenuHtmlAudio();
+    this.stopMenuTvBuzz();
+    this.stopMenuTvStatic();
+    if (this.currentMusicTrack === 'MUSIC_MENU' && this.currentMusic) {
+      try {
+        this.currentMusic.stop();
+      } catch {
+        // ignore
+      }
+      try {
+        this.currentMusic.disconnect();
+      } catch {
+        // ignore
+      }
+      this.currentMusic = null;
+    }
+    if (this.currentMusicGain && this.currentMusicTrack === 'MUSIC_MENU') {
+      try {
+        this.currentMusicGain.disconnect();
+      } catch {
+        // ignore
+      }
+      this.currentMusicGain = null;
+    }
+    if (this.currentMusicTrack === 'MUSIC_MENU') {
+      this.currentMusicTrack = null;
+    }
+  }
+
   // Music control
   async playMusic(track: MusicTrack): Promise<void> {
     const scheduled = this.musicSwitchQueue.then(() => this.runPlayMusic(track));
@@ -704,6 +880,13 @@ class AudioManagerClass {
 
   private async runPlayMusic(track: MusicTrack): Promise<void> {
     if (!this.isInitialized) return;
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      try {
+        await this.audioContext.resume();
+      } catch {
+        // ignore
+      }
+    }
 
     if (this.shouldKeepCurrentMusicTrack(track)) {
       this.updateMusicVolume();
@@ -722,6 +905,9 @@ class AudioManagerClass {
       if (htmlOk) {
         this.syncHorrorWithTrack(track);
         await this.refreshAmbienceLoops(track);
+        if (!preserveTvStaticForCrossfade) {
+          this.startMenuTvBuzz();
+        }
         return;
       }
     }
@@ -754,15 +940,38 @@ class AudioManagerClass {
     const volume = this.settings.muted ? 0 :
       this.settings.musicVolume * this.settings.masterVolume;
     const silentStart = this.pendingMenuMusicSilentStart;
-    this.currentMusicGain.gain.value = silentStart ? 0 : volume;
+    const gameplayFadeIn = this.pendingGameplayMusicFadeInMs;
+    if (gameplayFadeIn != null) {
+      this.pendingGameplayMusicFadeInMs = null;
+    }
     if (silentStart) this.pendingMenuMusicSilentStart = false;
 
     this.currentMusic.connect(this.currentMusicGain);
     this.currentMusicGain.connect(this.audioContext.destination);
 
+    const t = this.audioContext.currentTime;
+    const useGameplayFade =
+      !silentStart &&
+      gameplayFadeIn != null &&
+      gameplayFadeIn > 0 &&
+      volume > 0 &&
+      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS');
+    if (useGameplayFade) {
+      this.currentMusicGain.gain.setValueAtTime(0, t);
+      this.currentMusicGain.gain.linearRampToValueAtTime(
+        volume,
+        t + gameplayFadeIn / 1000
+      );
+    } else {
+      this.currentMusicGain.gain.value = silentStart ? 0 : volume;
+    }
+
     this.currentMusic.start(0);
     this.syncHorrorWithTrack(track);
     await this.refreshAmbienceLoops(track);
+    if (track === 'MUSIC_MENU' && !preserveTvStaticForCrossfade) {
+      this.startMenuTvBuzz();
+    }
   }
 
   /**
@@ -773,6 +982,7 @@ class AudioManagerClass {
   hardStopMusicAndBeds(opts?: { preserveTvStatic?: boolean }): void {
     if (!opts?.preserveTvStatic) {
       this.stopMenuTvStatic();
+      this.stopMenuTvBuzz();
     }
     this.stopMenuHtmlAudio();
     if (this.currentMusic) {
@@ -1011,6 +1221,7 @@ class AudioManagerClass {
     ) {
       return;
     }
+    this.ensureAudioContextRunning();
     const nowT = this.audioContext.currentTime;
     if (nowT < this.skitterCooldownUntil) return;
     this.skitterCooldownUntil = nowT + 0.06;
@@ -1083,14 +1294,18 @@ class AudioManagerClass {
 
   private updateMusicVolume(): void {
     if (this.currentMusicGain && this.audioContext) {
-      const volume = this.settings.muted ? 0 : 
+      const volume = this.settings.muted ? 0 :
         this.settings.musicVolume * this.settings.masterVolume;
       this.currentMusicGain.gain.setValueAtTime(
-        volume, 
+        volume,
         this.audioContext.currentTime
       );
     }
     this.applyMenuHtmlVolume();
+    if (this.currentMusicTrack === 'MUSIC_MENU' && !this.settings.muted && !this.menuTvBuzz) {
+      this.startMenuTvBuzz();
+    }
+    this.refreshMenuTvBuzzVolume();
     this.updateHorrorVolume();
     this.updateAmbienceLoopGains();
   }
@@ -1109,8 +1324,12 @@ class AudioManagerClass {
       this.applyMenuHtmlVolume();
       void this.menuHtmlAudio.play().catch(() => undefined);
     }
-    if (this.audioContext?.state === 'suspended') {
-      await this.audioContext.resume();
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      try {
+        await this.audioContext.resume();
+      } catch {
+        // ignore
+      }
     }
   }
 }

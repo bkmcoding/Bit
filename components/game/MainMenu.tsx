@@ -325,7 +325,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
       {awaitingStandby && (
         <button
           type="button"
-          className="absolute inset-0 z-[50] flex cursor-pointer flex-col items-center justify-center gap-8 border-0 bg-[#020101] p-8 outline-none transition-colors hover:bg-[#050302] focus-visible:ring-2 focus-visible:ring-[#5a2828] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+          className="absolute inset-0 z-[50] flex cursor-pointer flex-col items-center justify-center gap-8 border-0 bg-[#020101] p-8 outline-none focus-visible:ring-2 focus-visible:ring-[#5a2828] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
           onClick={handleTvPowerOn}
           aria-label="Click to power on the display"
         >

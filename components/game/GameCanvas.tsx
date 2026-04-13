@@ -13,6 +13,11 @@ import { PauseMenu } from './PauseMenu';
 import { UpgradeModal } from './UpgradeModal';
 import { GameOverScreen } from './GameOverScreen';
 
+/** Fade to black before first run; menu audio ducks out before gameplay music fades in. */
+const MENU_TO_GAME_COVER_MS = 620;
+const MENU_AUDIO_LEAVE_MS = 880;
+const GAMEPLAY_MUSIC_FADE_IN_MS = 2000;
+
 export function GameCanvas() {
   const bufferRef = useRef<HTMLCanvasElement>(null);
   const glRef = useRef<HTMLCanvasElement>(null);
@@ -24,6 +29,8 @@ export function GameCanvas() {
   const [roomInfo, setRoomInfo] = useState({ current: 0, total: ROOM_CONFIGS.length });
   const [upgrades, setUpgrades] = useState<Upgrade[]>([]);
   const [isVictory, setIsVictory] = useState(false);
+  /** Fullscreen black cover opacity (0–1) for menu → gameplay. */
+  const [menuToGameCover, setMenuToGameCover] = useState(0);
 
   const gameStateRef = useRef<GameState>('MENU');
   useEffect(() => {
@@ -88,7 +95,13 @@ export function GameCanvas() {
 
   const handleStart = useCallback(async (selected: Difficulty) => {
     await AudioManager.resume();
+    setMenuToGameCover(1);
+    await new Promise<void>((r) => setTimeout(r, MENU_TO_GAME_COVER_MS));
+    AudioManager.scheduleGameplayMusicFadeIn(GAMEPLAY_MUSIC_FADE_IN_MS);
+    await AudioManager.fadeOutMenuAtmosphereForGameplay(MENU_AUDIO_LEAVE_MS);
+    await AudioManager.resume();
     gameRef.current?.start(selected);
+    setMenuToGameCover(0);
   }, []);
 
   const handleResume = useCallback(() => {
@@ -142,6 +155,12 @@ export function GameCanvas() {
             imageRendering: 'pixelated',
             cursor: displayMode === 'webgl' && gameState === 'PLAYING' ? 'crosshair' : 'default',
           }}
+        />
+
+        <div
+          className="pointer-events-none absolute inset-0 z-[100] bg-black transition-opacity duration-[700ms] ease-in-out"
+          style={{ opacity: menuToGameCover }}
+          aria-hidden
         />
 
         {/* UI Overlay */}

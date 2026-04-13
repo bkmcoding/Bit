@@ -20,6 +20,10 @@ export class Player extends Entity {
   public projectileSizeBonus: number = 0;
   /** Multiplier on incoming damage (below 1 = tankier). */
   public damageTakenMult: number = 1;
+  /** Subtracted after the multiplier; helps vs 2-damage hits when you only have a few hearts. */
+  public flatDamageMitigation: number = 0;
+  /** Added after the multiplier (extra pain per hit). */
+  public flatDamagePenalty: number = 0;
   /** Chance 0–1 to heal on kill. */
   public killHealChance: number = 0;
   /** Every N kills, heal `amount` HP. */
@@ -189,10 +193,14 @@ export class Player extends Entity {
     if (this.spawnProtectionTime > 0) return;
     if (this.isInvulnerable) return;
 
-    const dealt = Math.max(1, Math.round(amount * this.damageTakenMult));
+    let dealt = Math.max(1, Math.round(amount * this.damageTakenMult));
+    dealt = Math.max(1, dealt + this.flatDamagePenalty - this.flatDamageMitigation);
     this.health -= dealt;
     this.isInvulnerable = true;
-    this.invulnerableTime = PLAYER.INVULN_TIME + this.hitInvulnBonus;
+    this.invulnerableTime = Math.max(
+      0.35,
+      PLAYER.INVULN_TIME + this.hitInvulnBonus
+    );
     
     AudioManager.play('SFX_PLAYER_HURT');
     this.game.shake(11);
