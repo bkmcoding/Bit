@@ -72,7 +72,7 @@ export class Broodmother extends Enemy {
     const brood = this.broodSpiderCount();
     if (brood > 0) {
       this.flashTimer = 0.12;
-      AudioManager.play('SFX_ENEMY_HIT');
+      AudioManager.playEnemyHit(1, this.size);
       this.game.particles.emit(this.position, '#7ae8ff', 7, 52);
       this.game.shake(2);
       // Still allow progress: shield reduces damage instead of blocking it.

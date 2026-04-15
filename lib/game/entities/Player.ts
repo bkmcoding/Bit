@@ -101,6 +101,29 @@ export class Player extends Entity {
       );
     }
 
+    if (this.game.isBossIntroPlaying()) {
+      this.dashBurstRemaining = 0;
+      this.velocity.x = 0;
+      this.velocity.y = 0;
+      this.legOffset *= 0.88;
+      this.fireCooldown -= deltaTime;
+      const aimMouse = this.game.getAimMousePosition();
+      this.facingAngle = this.position.angleTo(aimMouse);
+      if (this.isInvulnerable) {
+        this.invulnerableTime -= deltaTime;
+        if (this.invulnerableTime <= 0) {
+          this.isInvulnerable = false;
+        }
+      }
+      if (this.spawnProtectionTime > 0) {
+        this.spawnProtectionTime = Math.max(0, this.spawnProtectionTime - deltaTime);
+      }
+      if (this.frenzyTimer > 0) {
+        this.frenzyTimer = Math.max(0, this.frenzyTimer - deltaTime);
+      }
+      return;
+    }
+
     if (this.dashBurstRemaining > 0) {
       this.dashBurstRemaining -= deltaTime;
       this.velocity = this.dashDir.mul(this.speed * PLAYER.DASH_SPEED_MULT);

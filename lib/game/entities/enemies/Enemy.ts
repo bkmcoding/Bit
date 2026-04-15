@@ -77,7 +77,7 @@ export abstract class Enemy extends Entity {
     this.flashTimer = 0.1;
     
     // Play hit sound
-    AudioManager.play('SFX_ENEMY_HIT');
+    AudioManager.playEnemyHit(1, this.size);
     
     // Emit hit particles
     this.game.particles.emit(this.position, '#ffff00', 3, 40);

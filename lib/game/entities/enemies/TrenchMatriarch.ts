@@ -292,7 +292,7 @@ export class TrenchMatriarch extends Enemy {
       this.game.spawnEnemy(new MurkLeech(this.position.add(off), this.game));
     }
     this.game.shake(4);
-    AudioManager.play('SFX_ENEMY_HIT', 0.5);
+    AudioManager.playEnemyHit(0.5, ENEMY.MURK_LEECH.size);
   }
 
   private updateRush(deltaTime: number): void {

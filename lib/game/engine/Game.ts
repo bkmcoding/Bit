@@ -34,6 +34,14 @@ import { AudioManager } from '../audio/AudioManager';
 import type { Upgrade } from '../upgrades/Upgrade';
 import { getRandomUpgrades } from '../upgrades/upgradePool';
 
+/** Seconds; first visit Broodmother (sector 12) only. */
+const BOSS_INTRO_BROODMOTHER_TOTAL = 4.92;
+/** Seconds; final Trench Matriarch room. */
+const BOSS_INTRO_MATRIARCH_TOTAL = 5.42;
+/** Wall-clock seconds for each intro stinger (same index = both bosses). */
+const BOSS_INTRO_BROOD_CUES = [0, 0.3, 0.86, 1.52, 2.32, 3.18] as const;
+const BOSS_INTRO_MAT_CUES = [0, 0.42, 1.08, 1.85, 2.78, 3.68] as const;
+
 export type RoomHudPayload = {
   current: number;
   total: number;
@@ -106,6 +114,13 @@ export class Game {
   private chapterBridgePending = false;
   private chapter2Unlocked = false;
 
+  /** Cinematic beat before boss AI engages (sector 12 Broodmother + finale Matriarch). */
+  private bossIntro: null | {
+    kind: 'broodmother' | 'matriarch';
+    t: number;
+    fired: Set<number>;
+  } = null;
+
   private static rollRunSeed(): number {
     try {
       const buf = new Uint32Array(1);
@@ -172,6 +187,7 @@ export class Game {
   private prepareNewRun(): void {
     this.chapterBridgePending = false;
     this.chapter2Unlocked = false;
+    this.bossIntro = null;
     this.stop();
     this.hiveMindRegistry.clear();
     this.entities = [];
@@ -234,6 +250,10 @@ export class Game {
     if (this.state === 'CHAPTER_MAP') return;
     if (this.state !== 'PLAYING') return;
 
+    if (this.bossIntro) {
+      this.updateBossIntro(deltaTime);
+    }
+
     if (this.dev.godMode) {
       // Keep the player effectively unkillable while still allowing normal movement/testing.
       this.player.grantSpawnProtection(0.25);
@@ -247,9 +267,14 @@ export class Game {
 
     // Enemies first so hazards (e.g. webs) can set movement penalties before the player moves.
     for (const enemy of this.enemies) {
-      if (enemy.isActive) {
-        enemy.update(deltaTime);
+      if (!enemy.isActive) continue;
+      if (
+        this.bossIntro &&
+        (enemy instanceof Broodmother || enemy instanceof TrenchMatriarch)
+      ) {
+        continue;
       }
+      enemy.update(deltaTime);
     }
 
     this.applyEnemySeparation(deltaTime);
@@ -284,7 +309,9 @@ export class Game {
     }
 
     // Check door transitions
-    this.checkDoorTransition();
+    if (!this.bossIntro) {
+      this.checkDoorTransition();
+    }
 
     // Update screen shake
     if (this.shakeIntensity > 0.1) {
@@ -297,6 +324,89 @@ export class Game {
     this.horrorTime += deltaTime;
 
     this.updateEnemySkitter(deltaTime);
+  }
+
+  isBossIntroPlaying(): boolean {
+    return this.bossIntro !== null;
+  }
+
+  /** Called from `RoomManager` on first combat entry to sector 12 or the finale boss room. */
+  beginBossIntroIfNeeded(roomIndex: number, room: Room): void {
+    if (this.state !== 'PLAYING') return;
+    const sectorBrood =
+      roomIndex === CHAPTER_1_LAST_ROOM_INDEX &&
+      room.spawns.some((s) => s.enemyType === 'broodmother');
+    const finaleMat = room.isBossRoom;
+    if (!sectorBrood && !finaleMat) return;
+    this.bossIntro = {
+      kind: finaleMat ? 'matriarch' : 'broodmother',
+      t: 0,
+      fired: new Set(),
+    };
+    this.player.grantSpawnProtection(
+      Math.max(BOSS_INTRO_BROODMOTHER_TOTAL, BOSS_INTRO_MATRIARCH_TOTAL) + 0.45
+    );
+    if (sectorBrood) {
+      void AudioManager.playMusic('MUSIC_BOSS');
+    }
+  }
+
+  private updateBossIntro(deltaTime: number): void {
+    if (!this.bossIntro) return;
+    const bi = this.bossIntro;
+    bi.t += deltaTime;
+    const cues =
+      bi.kind === 'broodmother' ? BOSS_INTRO_BROOD_CUES : BOSS_INTRO_MAT_CUES;
+    const total =
+      bi.kind === 'broodmother'
+        ? BOSS_INTRO_BROODMOTHER_TOTAL
+        : BOSS_INTRO_MATRIARCH_TOTAL;
+
+    for (let i = 0; i < cues.length; i++) {
+      const tCue = cues[i]!;
+      if (bi.t >= tCue && !bi.fired.has(i)) {
+        bi.fired.add(i);
+        if (bi.kind === 'broodmother') {
+          AudioManager.playBossIntroBroodmotherCue(i);
+          if (i === 4) this.shake(9);
+        } else {
+          AudioManager.playBossIntroMatriarchCue(i);
+          if (i === 4) this.shake(12);
+        }
+      }
+    }
+
+    if (bi.t >= total) {
+      this.bossIntro = null;
+    }
+  }
+
+  private renderBossIntroOverlay(ctx: CanvasRenderingContext2D): void {
+    if (!this.bossIntro) return;
+    const w = GAME.BUFFER_WIDTH;
+    const h = GAME.BUFFER_HEIGHT;
+    const dur =
+      this.bossIntro.kind === 'broodmother'
+        ? BOSS_INTRO_BROODMOTHER_TOTAL
+        : BOSS_INTRO_MATRIARCH_TOTAL;
+    const p = Math.min(1, this.bossIntro.t / dur);
+    ctx.save();
+    const bar = 15 + Math.floor(p * 5);
+    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+    ctx.fillRect(0, 0, w, bar);
+    ctx.fillRect(0, h - bar, w, bar);
+    const title =
+      this.bossIntro.kind === 'broodmother' ? 'BROODMOTHER' : 'TRENCH MATRIARCH';
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = `rgba(230, 210, 255, ${0.42 + 0.38 * Math.sin(this.ambiencePhase * 2.2)})`;
+    ctx.fillText(title, w * 0.5, bar * 0.5 + 1);
+    const subtitle = this.bossIntro.kind === 'broodmother' ? 'SECTOR 12' : 'ABYSS';
+    ctx.font = '6px monospace';
+    ctx.fillStyle = 'rgba(160, 150, 190, 0.55)';
+    ctx.fillText(subtitle, w * 0.5, h - bar * 0.5 + 1);
+    ctx.restore();
   }
 
   private handleDeveloperBackdoor(): void {
@@ -530,6 +640,9 @@ export class Game {
       this.renderHorrorOverlay(ctx);
     }
 
+    if (this.state === 'PLAYING' && this.bossIntro) {
+      this.renderBossIntroOverlay(ctx);
+    }
   }
 
   /** Dark + vignette + corner pools — no radial triangles (those read as a “star” on screen). */

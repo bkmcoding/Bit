@@ -119,6 +119,7 @@ export class RoomManager {
       );
       this.game.player.grantSpawnProtection(sec);
       room.closeDoors();
+      this.game.beginBossIntroIfNeeded(roomIndex, room);
     } else if (firstVisit) {
       this.game.player.setPosition(doorSpawn);
       this.resolvePlayerOutOfObstacles();

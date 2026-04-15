@@ -304,13 +304,20 @@ class AudioManagerClass {
     this.ensureAudioContextRunning();
 
     if (effect === 'SFX_ENEMY_HIT') {
-      const v =
-        volume *
-        this.settings.sfxVolume *
-        this.settings.masterVolume *
-        SFX_BUFFER_LEVEL *
-        1.08;
-      this.playEnemyHitGooey(v);
+      this.playEnemyHit(volume, 12);
+      return;
+    }
+
+    if (effect === 'SFX_ENEMY_DEATH') {
+      const base =
+        volume * this.settings.sfxVolume * this.settings.masterVolume * SFX_BUFFER_LEVEL;
+      const path = AUDIO_PATHS.SFX_ENEMY_DEATH;
+      const buffer = this.sounds.get(path);
+      if (buffer && this.audioContext) {
+        this.playBuffer(buffer, base * 1.22, 1.14);
+      } else {
+        this.playFallbackSound(effect, volume * 1.15);
+      }
       return;
     }
 
@@ -412,60 +419,88 @@ class AudioManagerClass {
   }
 
   /**
-   * Enemy damaged — always synthesized. Horror / bug-splat: low thump, mud-filtered burst,
-   * tiny chitin crack — no bright sweeps (reads as “laser”). Ignores `enemy-hit.mp3`.
+   * Enemy hurt — synthesized; `enemySize` maps pitch (`Enemy.size`, see `ENEMY` in constants).
+   * Smaller enemies = higher chirp; bosses = deeper body. Ignores `enemy-hit.mp3`.
    */
-  private playEnemyHitGooey(linearGain: number): void {
+  playEnemyHit(volume = 1, enemySize = 12): void {
+    if (this.settings.muted || !this.isInitialized) return;
+    this.ensureAudioContextRunning();
+    const v =
+      volume *
+      this.settings.sfxVolume *
+      this.settings.masterVolume *
+      SFX_BUFFER_LEVEL *
+      1.26;
+    this.playEnemyHitGooey(v, enemySize);
+  }
+
+  /**
+   * @param linearGain — pre-scaled gain
+   * @param enemySize — collision diameter in px (`Enemy.size`), ~7 tiny → ~32 brood
+   */
+  private playEnemyHitGooey(linearGain: number, enemySize: number): void {
     if (!this.audioContext || this.settings.muted) return;
     const ctx = this.audioContext;
     const now = ctx.currentTime;
-    const v = linearGain * 1.45;
+    const v = linearGain * 1.72;
+
+    /** ~7 skitter → 0, ~32 brood → 1 */
+    const SZ_MIN = 7;
+    const SZ_MAX = 34;
+    const t = Math.max(0, Math.min(1, (enemySize - SZ_MIN) / (SZ_MAX - SZ_MIN)));
+    /** Higher for small bugs (insect squeal), lower for bosses (heft). */
+    const fMul = 1.52 - t * 0.82;
+    /** Big enemies keep more low body; tiny ones barely use the sine tap. */
+    const wThump = 0.06 + t * 0.94;
+    /** Extra level on crack/yelp/snap for small targets (cheap speakers skew low). */
+    const wHigh = 1.05 + (1 - t) * 0.62;
+    const fm = (hz: number) => hz * fMul;
 
     const merge = ctx.createGain();
     merge.gain.value = 1;
 
-    // --- Body / viscera thump (weight)
+    // --- Optional low body (scaled down for small enemies so it doesn’t read as a “kick”)
     const thump = ctx.createOscillator();
     const thG = ctx.createGain();
     thump.type = 'sine';
-    thump.frequency.setValueAtTime(62 + Math.random() * 10, now);
-    thump.frequency.exponentialRampToValueAtTime(38, now + 0.1);
+    thump.frequency.setValueAtTime(fm(108 + Math.random() * 16), now);
+    thump.frequency.exponentialRampToValueAtTime(fm(62 + t * 28), now + 0.07);
     thG.gain.setValueAtTime(0.0001, now);
-    thG.gain.linearRampToValueAtTime(v * 0.72, now + 0.016);
-    thG.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    thG.gain.linearRampToValueAtTime(v * 0.52 * wThump, now + 0.01);
+    thG.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
     thump.connect(thG);
     thG.connect(merge);
     thump.start(now);
-    thump.stop(now + 0.24);
+    thump.stop(now + 0.15);
 
-    // --- Wet squelch (low triangle, heavily damped — not a zippy tone)
+    // --- Mid squeal (main “bug” tone)
     const glop = ctx.createOscillator();
     const gG = ctx.createGain();
     glop.type = 'triangle';
-    glop.frequency.setValueAtTime(105 + Math.random() * 18, now);
-    glop.frequency.exponentialRampToValueAtTime(58, now + 0.072);
+    glop.frequency.setValueAtTime(fm(300 + Math.random() * 60), now);
+    glop.frequency.exponentialRampToValueAtTime(fm(140 + t * 55), now + 0.05);
     gG.gain.setValueAtTime(0.0001, now);
-    gG.gain.linearRampToValueAtTime(v * 0.32, now + 0.008);
-    gG.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+    gG.gain.linearRampToValueAtTime(v * 0.58 * wHigh, now + 0.0035);
+    gG.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
     glop.connect(gG);
     const gLp = ctx.createBiquadFilter();
     gLp.type = 'lowpass';
-    gLp.frequency.setValueAtTime(420, now);
+    gLp.frequency.setValueAtTime(fm(2600), now);
     gG.connect(gLp);
     gLp.connect(merge);
     glop.start(now);
-    glop.stop(now + 0.14);
+    glop.stop(now + 0.12);
 
-    // --- Brown-ish mud splat (chunky steps, slow decay — horror texture)
+    // --- Grit (stepped noise), mids only
     const len = Math.floor(ctx.sampleRate * 0.11);
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const ch = buf.getChannelData(0);
     const steps = 14;
     let brown = 0;
     for (let i = 0; i < len; i++) {
-      const t = i / len;
+      const ti = i / len;
       const env =
-        Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.65)), 0.75) * Math.exp(-2.05 * t);
+        Math.pow(Math.sin(Math.PI * Math.min(1, ti * 1.65)), 0.75) * Math.exp(-2.05 * ti);
       brown += (Math.random() * 2 - 1) * 0.085;
       brown *= 0.965;
       let x = brown * env + (Math.random() * 2 - 1) * env * 0.35;
@@ -477,60 +512,149 @@ class AudioManagerClass {
     mud.buffer = buf;
     const mG = ctx.createGain();
     mG.gain.setValueAtTime(0.0001, now);
-    mG.gain.linearRampToValueAtTime(v * 0.46, now + 0.011);
-    mG.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    mG.gain.linearRampToValueAtTime(v * 0.48 * wHigh, now + 0.007);
+    mG.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+    const mHp = ctx.createBiquadFilter();
+    mHp.type = 'highpass';
+    mHp.frequency.setValueAtTime(fm(420), now);
     const mLp = ctx.createBiquadFilter();
     mLp.type = 'lowpass';
-    mLp.frequency.setValueAtTime(320, now);
+    mLp.frequency.setValueAtTime(fm(2600), now);
     mLp.Q.setValueAtTime(0.85, now);
     mud.connect(mG);
-    mG.connect(mLp);
+    mG.connect(mHp);
+    mHp.connect(mLp);
     mLp.connect(merge);
     mud.start(now);
-    mud.stop(now + 0.17);
+    mud.stop(now + 0.14);
 
-    // --- Single chitin crack (ms-scale bandpass — not a sustained high beam)
+    // --- Chitin snap
     const crack = ctx.createOscillator();
     const cG = ctx.createGain();
     crack.type = 'triangle';
-    crack.frequency.setValueAtTime(195, now);
-    crack.frequency.exponentialRampToValueAtTime(125, now + 0.018);
+    crack.frequency.setValueAtTime(fm(480 + Math.random() * 100), now);
+    crack.frequency.exponentialRampToValueAtTime(fm(240 + t * 80), now + 0.017);
     cG.gain.setValueAtTime(0.0001, now);
-    cG.gain.linearRampToValueAtTime(v * 0.078, now + 0.0014);
+    cG.gain.linearRampToValueAtTime(v * 0.2 * wHigh, now + 0.001);
     cG.gain.exponentialRampToValueAtTime(0.0001, now + 0.032);
     crack.connect(cG);
     const bpf = ctx.createBiquadFilter();
     bpf.type = 'bandpass';
-    bpf.frequency.setValueAtTime(640 + Math.random() * 100, now);
-    bpf.Q.setValueAtTime(2.1, now);
+    bpf.frequency.setValueAtTime(fm(2200 + Math.random() * 420), now);
+    bpf.Q.setValueAtTime(2.6, now);
     cG.connect(bpf);
     bpf.connect(merge);
     crack.start(now);
-    crack.stop(now + 0.04);
+    crack.stop(now + 0.045);
 
-    // --- Body + air: lowpass mud, then mid “click” presence so hits read vs music (not only sub).
+    // --- Yelp / stridulation
+    const yelp = ctx.createOscillator();
+    const yG = ctx.createGain();
+    yelp.type = 'sawtooth';
+    const y0 = fm(920 + Math.random() * 200);
+    yelp.frequency.setValueAtTime(y0, now);
+    yelp.frequency.exponentialRampToValueAtTime(fm(280 + t * 120), now + 0.04);
+    yG.gain.setValueAtTime(0.0001, now);
+    yG.gain.linearRampToValueAtTime(v * 0.26 * wHigh, now + 0.0016);
+    yG.gain.exponentialRampToValueAtTime(0.0001, now + 0.055);
+    yelp.connect(yG);
+    const yBpf = ctx.createBiquadFilter();
+    yBpf.type = 'bandpass';
+    yBpf.frequency.setValueAtTime(fm(1500 + Math.random() * 280), now);
+    yBpf.Q.setValueAtTime(2.4, now);
+    yG.connect(yBpf);
+    yBpf.connect(merge);
+    yelp.start(now);
+    yelp.stop(now + 0.07);
+
+    // --- Air / stridulation noise
+    const nLen = Math.floor(ctx.sampleRate * 0.03);
+    const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+    const nCh = nBuf.getChannelData(0);
+    for (let i = 0; i < nLen; i++) {
+      const e = Math.exp(-88 * (i / nLen));
+      nCh[i] = (Math.random() * 2 - 1) * e * 0.95;
+    }
+    const nit = ctx.createBufferSource();
+    nit.buffer = nBuf;
+    const nG = ctx.createGain();
+    nG.gain.setValueAtTime(0.0001, now);
+    nG.gain.linearRampToValueAtTime(v * 0.2 * wHigh, now + 0.001);
+    nG.gain.exponentialRampToValueAtTime(0.0001, now + 0.026);
+    nit.connect(nG);
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.setValueAtTime(fm(2800), now);
+    hp.Q.setValueAtTime(0.65, now);
+    const nLp = ctx.createBiquadFilter();
+    nLp.type = 'lowpass';
+    nLp.frequency.setValueAtTime(fm(10000), now);
+    nG.connect(hp);
+    hp.connect(nLp);
+    nLp.connect(merge);
+    nit.start(now);
+    nit.stop(now + 0.032);
+
+    // --- Speaker-friendly “read” band: guaranteed 2.5–6 kHz energy (not masked by thump)
+    const snapLen = Math.floor(ctx.sampleRate * 0.022);
+    const snapBuf = ctx.createBuffer(1, snapLen, ctx.sampleRate);
+    const snapCh = snapBuf.getChannelData(0);
+    for (let i = 0; i < snapLen; i++) {
+      const e = Math.sin((i / snapLen) * Math.PI);
+      snapCh[i] = (Math.random() * 2 - 1) * e * 0.9;
+    }
+    const snap = ctx.createBufferSource();
+    snap.buffer = snapBuf;
+    const sG = ctx.createGain();
+    sG.gain.setValueAtTime(0.0001, now);
+    sG.gain.linearRampToValueAtTime(v * 0.42 * wHigh, now + 0.002);
+    sG.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
+    snap.connect(sG);
+    const sBpf = ctx.createBiquadFilter();
+    sBpf.type = 'bandpass';
+    sBpf.frequency.setValueAtTime(fm(3200 + Math.random() * 900), now);
+    sBpf.Q.setValueAtTime(3.2, now);
+    sG.connect(sBpf);
+    sBpf.connect(merge);
+    snap.start(now);
+    snap.stop(now + 0.024);
+
+    // --- Master: steep sub cut so laptop drivers don’t turn everything into a thump
+    const hip = ctx.createBiquadFilter();
+    hip.type = 'highpass';
+    hip.frequency.setValueAtTime(140, now);
+    hip.Q.setValueAtTime(0.71, now);
+
     const masterLp = ctx.createBiquadFilter();
     masterLp.type = 'lowpass';
-    masterLp.frequency.setValueAtTime(2400, now);
-    masterLp.frequency.exponentialRampToValueAtTime(520, now + 0.09);
-    masterLp.Q.setValueAtTime(0.65, now);
+    masterLp.frequency.setValueAtTime(11000, now);
+    masterLp.frequency.exponentialRampToValueAtTime(7600, now + 0.05);
+    masterLp.Q.setValueAtTime(0.5, now);
 
     const presence = ctx.createBiquadFilter();
     presence.type = 'peaking';
-    presence.frequency.setValueAtTime(520, now);
-    presence.Q.setValueAtTime(0.85, now);
-    presence.gain.setValueAtTime(6.5, now);
+    presence.frequency.setValueAtTime(fm(1600), now);
+    presence.Q.setValueAtTime(0.82, now);
+    presence.gain.setValueAtTime(4.2 + (1 - t) * 2.8, now);
+
+    const bite = ctx.createBiquadFilter();
+    bite.type = 'peaking';
+    bite.frequency.setValueAtTime(fm(3400), now);
+    bite.Q.setValueAtTime(1.05, now);
+    bite.gain.setValueAtTime(5.5 + (1 - t) * 2, now);
 
     const hs = ctx.createBiquadFilter();
     hs.type = 'highshelf';
-    hs.frequency.setValueAtTime(2800, now);
-    hs.gain.setValueAtTime(-5, now);
+    hs.frequency.setValueAtTime(4800, now);
+    hs.gain.setValueAtTime(4.8 + (1 - t) * 1.5, now);
 
     const out = ctx.createGain();
-    out.gain.setValueAtTime(1.28, now);
-    merge.connect(masterLp);
+    out.gain.setValueAtTime(1.22, now);
+    merge.connect(hip);
+    hip.connect(masterLp);
     masterLp.connect(presence);
-    presence.connect(hs);
+    presence.connect(bite);
+    bite.connect(hs);
     hs.connect(out);
     out.connect(ctx.destination);
   }
@@ -738,12 +862,12 @@ class AudioManagerClass {
     sub.stop(now + 0.17);
   }
 
-  /** Enemy killed — long low crumble + pressure drop (not a cheerful arcade slide). */
+  /** Enemy killed — insect wail + airy breakup; sub-only is de-emphasized vs “knock”. */
   private playEnemyDeathHorror(vol: number): void {
     if (!this.audioContext || this.settings.muted) return;
     const ctx = this.audioContext;
     const now = ctx.currentTime;
-    const v = vol * 1.62;
+    const v = vol * 2.05;
 
     const merge = ctx.createGain();
     merge.gain.value = 1;
@@ -758,56 +882,94 @@ class AudioManagerClass {
       carry += (Math.random() * 2 - 1) * 0.06;
       carry *= 0.988;
       const x = Math.tanh((carry + (Math.random() * 2 - 1) * 0.45) * env);
-      ch[i] = x * 0.55;
+      ch[i] = x * 0.78;
     }
 
     const crumble = ctx.createBufferSource();
     crumble.buffer = buf;
     const cG = ctx.createGain();
     cG.gain.setValueAtTime(0.0001, now);
-    cG.gain.linearRampToValueAtTime(v * 0.42, now + 0.04);
+    cG.gain.linearRampToValueAtTime(v * 0.48, now + 0.04);
     cG.gain.exponentialRampToValueAtTime(0.0001, now + 0.48);
+    const cHp = ctx.createBiquadFilter();
+    cHp.type = 'highpass';
+    cHp.frequency.setValueAtTime(450, now);
     const cLp = ctx.createBiquadFilter();
     cLp.type = 'lowpass';
-    cLp.frequency.setValueAtTime(1100, now);
-    cLp.frequency.exponentialRampToValueAtTime(180, now + 0.35);
+    cLp.frequency.setValueAtTime(5200, now);
+    cLp.frequency.exponentialRampToValueAtTime(900, now + 0.38);
     crumble.connect(cG);
-    cG.connect(cLp);
+    cG.connect(cHp);
+    cHp.connect(cLp);
     cLp.connect(merge);
 
+    // Main “death cry” — mid/high triangle fall (bug-like, not bass drop)
     const body = ctx.createOscillator();
     const bG = ctx.createGain();
     body.type = 'triangle';
-    body.frequency.setValueAtTime(155 + Math.random() * 22, now);
-    body.frequency.exponentialRampToValueAtTime(38, now + 0.38);
+    body.frequency.setValueAtTime(380 + Math.random() * 45, now);
+    body.frequency.exponentialRampToValueAtTime(95, now + 0.35);
     bG.gain.setValueAtTime(0.0001, now);
-    bG.gain.linearRampToValueAtTime(v * 0.28, now + 0.02);
-    bG.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+    bG.gain.linearRampToValueAtTime(v * 0.58, now + 0.018);
+    bG.gain.exponentialRampToValueAtTime(0.0001, now + 0.42);
+    const bBpf = ctx.createBiquadFilter();
+    bBpf.type = 'bandpass';
+    bBpf.frequency.setValueAtTime(1100, now);
+    bBpf.Q.setValueAtTime(1.2, now);
     body.connect(bG);
-    bG.connect(merge);
+    bG.connect(bBpf);
+    bBpf.connect(merge);
 
+    // Quiet undertow only — was reading as dull thump
     const sub = ctx.createOscillator();
     const sG = ctx.createGain();
     sub.type = 'sine';
-    sub.frequency.setValueAtTime(48, now);
-    sub.frequency.exponentialRampToValueAtTime(28, now + 0.5);
+    sub.frequency.setValueAtTime(72, now);
+    sub.frequency.exponentialRampToValueAtTime(38, now + 0.48);
     sG.gain.setValueAtTime(0.0001, now);
-    sG.gain.linearRampToValueAtTime(v * 0.55, now + 0.05);
-    sG.gain.exponentialRampToValueAtTime(0.0001, now + 0.52);
+    sG.gain.linearRampToValueAtTime(v * 0.32, now + 0.06);
+    sG.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
     sub.connect(sG);
     sG.connect(merge);
 
+    // Stridulation burst — short high chirps as life fades
+    for (let k = 0; k < 4; k++) {
+      const t0 = now + 0.06 + k * 0.07;
+      const chirp = ctx.createOscillator();
+      const chG = ctx.createGain();
+      chirp.type = 'triangle';
+      chirp.frequency.setValueAtTime(2200 + Math.random() * 400, t0);
+      chirp.frequency.exponentialRampToValueAtTime(520, t0 + 0.035);
+      chG.gain.setValueAtTime(0.0001, t0);
+      chG.gain.linearRampToValueAtTime(v * 0.09, t0 + 0.0015);
+      chG.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.045);
+      const chLp = ctx.createBiquadFilter();
+      chLp.type = 'lowpass';
+      chLp.frequency.setValueAtTime(4800, t0);
+      chirp.connect(chG);
+      chG.connect(chLp);
+      chLp.connect(merge);
+      chirp.start(t0);
+      chirp.stop(t0 + 0.052);
+    }
+
     const pres = ctx.createBiquadFilter();
     pres.type = 'peaking';
-    pres.frequency.setValueAtTime(380, now);
+    pres.frequency.setValueAtTime(1800, now);
     pres.Q.setValueAtTime(0.75, now);
-    pres.gain.setValueAtTime(5, now);
+    pres.gain.setValueAtTime(8, now);
+
+    const air = ctx.createBiquadFilter();
+    air.type = 'highshelf';
+    air.frequency.setValueAtTime(3800, now);
+    air.gain.setValueAtTime(5.5, now);
 
     const outLp = ctx.createBiquadFilter();
     outLp.type = 'lowpass';
-    outLp.frequency.setValueAtTime(3200, now);
+    outLp.frequency.setValueAtTime(8800, now);
     merge.connect(pres);
-    pres.connect(outLp);
+    pres.connect(air);
+    air.connect(outLp);
     outLp.connect(ctx.destination);
 
     crumble.start(now);
@@ -1973,6 +2135,318 @@ class AudioManagerClass {
       this.playBuffer(buffer, v * SFX_BUFFER_LEVEL, 1);
     } else {
       this.playFallbackSound('SFX_ENEMY_SKITTER', scale * 0.85);
+    }
+  }
+
+  /** Base gain for scripted boss intro stingers (synth). */
+  private bossIntroSfxVol(mult = 1): number {
+    if (!this.isInitialized || this.settings.muted) return 0;
+    return (
+      mult *
+      this.settings.sfxVolume *
+      this.settings.masterVolume *
+      SFX_SYNTH_LEVEL *
+      SFX_SYNTH_PERCEIVED_BOOST
+    );
+  }
+
+  /** Sector 12 — silk, weight, growl, chitter, roar, exhale. */
+  playBossIntroBroodmotherCue(cue: number): void {
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+    this.ensureAudioContextRunning();
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = this.bossIntroSfxVol(1);
+    if (v <= 0) return;
+
+    switch (cue) {
+      case 0:
+        this.playWebTense(v * 0.58);
+        break;
+      case 1: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(58, now);
+        o.frequency.exponentialRampToValueAtTime(38, now + 0.11);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.95, now + 0.014);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start(now);
+        o.stop(now + 0.22);
+        break;
+      }
+      case 2: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(92, now);
+        o.frequency.exponentialRampToValueAtTime(48, now + 0.38);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.42, now + 0.04);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(420, now);
+        bp.Q.setValueAtTime(1.8, now);
+        o.connect(g);
+        g.connect(bp);
+        bp.connect(ctx.destination);
+        o.start(now);
+        o.stop(now + 0.48);
+        break;
+      }
+      case 3: {
+        for (let k = 0; k < 3; k++) {
+          const t0 = now + k * 0.055;
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'triangle';
+          o.frequency.setValueAtTime(260 + Math.random() * 80, t0);
+          o.frequency.exponentialRampToValueAtTime(110, t0 + 0.04);
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.linearRampToValueAtTime(v * 0.2, t0 + 0.002);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.06);
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start(t0);
+          o.stop(t0 + 0.07);
+        }
+        break;
+      }
+      case 4: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(78, now);
+        o.frequency.linearRampToValueAtTime(52, now + 0.18);
+        o.frequency.linearRampToValueAtTime(105, now + 0.42);
+        o.frequency.exponentialRampToValueAtTime(36, now + 0.88);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 1.85, now + 0.05);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.95);
+        const pk = ctx.createBiquadFilter();
+        pk.type = 'peaking';
+        pk.frequency.setValueAtTime(340, now);
+        pk.Q.setValueAtTime(0.9, now);
+        pk.gain.setValueAtTime(7, now);
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.setValueAtTime(2800, now);
+        o.connect(g);
+        g.connect(pk);
+        pk.connect(lp);
+        lp.connect(ctx.destination);
+        o.start(now);
+        o.stop(now + 1);
+        break;
+      }
+      case 5: {
+        const len = Math.floor(ctx.sampleRate * 0.2);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) {
+          const t = i / len;
+          const e = Math.pow(1 - t, 1.6);
+          ch[i] = (Math.random() * 2 - 1) * e * 0.85;
+        }
+        const n = ctx.createBufferSource();
+        n.buffer = buf;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.38, now + 0.06);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+        const hp = ctx.createBiquadFilter();
+        hp.type = 'highpass';
+        hp.frequency.setValueAtTime(900, now);
+        n.connect(g);
+        g.connect(hp);
+        hp.connect(ctx.destination);
+        n.start(now);
+        n.stop(now + 0.22);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  /** Finale — pressure, bubbles, scrape, moan, surge, tail ping. */
+  playBossIntroMatriarchCue(cue: number): void {
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+    this.ensureAudioContextRunning();
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = this.bossIntroSfxVol(1);
+    if (v <= 0) return;
+
+    switch (cue) {
+      case 0: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(28, now);
+        o.frequency.exponentialRampToValueAtTime(44, now + 0.55);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.72, now + 0.35);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.75);
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start(now);
+        o.stop(now + 0.8);
+        const ping = ctx.createOscillator();
+        const pg = ctx.createGain();
+        ping.type = 'sine';
+        ping.frequency.setValueAtTime(880, now + 0.42);
+        ping.frequency.exponentialRampToValueAtTime(320, now + 0.52);
+        pg.gain.setValueAtTime(0.0001, now + 0.4);
+        pg.gain.linearRampToValueAtTime(v * 0.12, now + 0.43);
+        pg.gain.exponentialRampToValueAtTime(0.0001, now + 0.58);
+        ping.connect(pg);
+        pg.connect(ctx.destination);
+        ping.start(now + 0.4);
+        ping.stop(now + 0.62);
+        break;
+      }
+      case 1: {
+        const len = Math.floor(ctx.sampleRate * 0.24);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) {
+          const t = i / len;
+          const e = Math.sin(Math.PI * t) * Math.exp(-2.2 * t);
+          ch[i] = (Math.random() * 2 - 1) * e * 0.9;
+        }
+        const n = ctx.createBufferSource();
+        n.buffer = buf;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.48, now + 0.04);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(720, now);
+        bp.Q.setValueAtTime(3.2, now);
+        n.connect(g);
+        g.connect(bp);
+        bp.connect(ctx.destination);
+        n.start(now);
+        n.stop(now + 0.28);
+        break;
+      }
+      case 2: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(195, now);
+        o.frequency.exponentialRampToValueAtTime(48, now + 0.32);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.35, now + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(380, now);
+        bp.Q.setValueAtTime(2.4, now);
+        o.connect(g);
+        g.connect(bp);
+        bp.connect(ctx.destination);
+        o.start(now);
+        o.stop(now + 0.42);
+        break;
+      }
+      case 3: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'triangle';
+        o.frequency.setValueAtTime(118, now);
+        o.frequency.exponentialRampToValueAtTime(42, now + 0.62);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.52, now + 0.08);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.78);
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.setValueAtTime(520, now);
+        o.connect(g);
+        g.connect(lp);
+        lp.connect(ctx.destination);
+        o.start(now);
+        o.stop(now + 0.82);
+        break;
+      }
+      case 4: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(52, now);
+        o.frequency.exponentialRampToValueAtTime(38, now + 0.22);
+        o.frequency.linearRampToValueAtTime(92, now + 0.48);
+        o.frequency.exponentialRampToValueAtTime(28, now + 1.05);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 2.05, now + 0.08);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 1.12);
+        const pk = ctx.createBiquadFilter();
+        pk.type = 'peaking';
+        pk.frequency.setValueAtTime(260, now);
+        pk.Q.setValueAtTime(0.85, now);
+        pk.gain.setValueAtTime(8, now);
+        const len = Math.floor(ctx.sampleRate * 0.45);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) {
+          const t = i / len;
+          const e = Math.pow(Math.sin(Math.PI * t), 0.5) * Math.exp(-1.8 * t);
+          ch[i] = (Math.random() * 2 - 1) * e;
+        }
+        const n = ctx.createBufferSource();
+        n.buffer = buf;
+        const ng = ctx.createGain();
+        ng.gain.setValueAtTime(0.0001, now + 0.05);
+        ng.gain.linearRampToValueAtTime(v * 0.55, now + 0.12);
+        ng.gain.exponentialRampToValueAtTime(0.0001, now + 0.48);
+        const hp = ctx.createBiquadFilter();
+        hp.type = 'highpass';
+        hp.frequency.setValueAtTime(1400, now);
+        const hs = ctx.createBiquadFilter();
+        hs.type = 'highshelf';
+        hs.frequency.setValueAtTime(2400, now);
+        hs.gain.setValueAtTime(4, now);
+        o.connect(g);
+        g.connect(pk);
+        pk.connect(ctx.destination);
+        n.connect(ng);
+        ng.connect(hp);
+        hp.connect(hs);
+        hs.connect(ctx.destination);
+        o.start(now);
+        n.start(now);
+        o.stop(now + 1.15);
+        n.stop(now + 0.52);
+        break;
+      }
+      case 5: {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(1240, now);
+        o.frequency.exponentialRampToValueAtTime(180, now + 0.35);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(v * 0.22, now + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.42);
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(900, now);
+        bp.Q.setValueAtTime(4, now);
+        o.connect(g);
+        g.connect(bp);
+        bp.connect(ctx.destination);
+        o.start(now);
+        o.stop(now + 0.45);
+        break;
+      }
+      default:
+        break;
     }
   }
 

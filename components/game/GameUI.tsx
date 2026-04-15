@@ -1,3 +1,4 @@
+import { PixelDashBar } from './PixelDashBar';
 import { PixelHeart } from './PixelHeart';
 import { RunRadar } from './RunRadar';
 import type { MinimapLayout } from '@/lib/game/rooms/roomData';
@@ -47,36 +48,21 @@ export function GameUI({
 
       {dash.unlocked && (
         <div
-          className="absolute left-4 z-20 flex flex-col gap-1"
+          className="absolute left-4 z-20 flex flex-col gap-1.5"
           style={{ top: '3.25rem' }}
           role="status"
           aria-label={`Dash stamina ${dash.stamina.toFixed(1)} of ${dash.max}`}
         >
+          <PixelDashBar fraction={dashFrac} chapter={chapter} />
           <div
-            className="h-2 w-22 rounded-sm overflow-hidden"
+            className="select-none font-mono text-[8px] uppercase leading-none tracking-[0.18em]"
             style={{
-              boxShadow: '0 0 0 1px rgba(160, 220, 255, 0.55), 0 0 12px rgba(40, 120, 180, 0.35)',
-              backgroundColor: 'rgba(4, 10, 16, 0.92)',
+              color: chapter === 2 ? '#5ec0c8' : '#7a98a8',
+              textShadow:
+                '1px 0 0 #080606, -1px 0 0 #080606, 0 1px 0 #080606, 0 -1px 0 #080606',
             }}
           >
-            <div
-              className="h-full rounded-sm"
-              style={{
-                width: `${Math.round(dashFrac * 100)}%`,
-                minWidth: dashFrac > 0.04 ? '4px' : 0,
-                background:
-                  chapter === 2
-                    ? 'linear-gradient(180deg, rgba(160, 240, 255, 0.95), rgba(40, 140, 200, 0.88))'
-                    : 'linear-gradient(180deg, rgba(200, 230, 255, 0.95), rgba(90, 140, 190, 0.9))',
-                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35)',
-              }}
-            />
-          </div>
-          <div
-            className="text-[10px] font-mono tracking-wide"
-            style={{ color: 'rgba(170, 210, 235, 0.9)', textShadow: '0 1px 2px rgba(0,0,0,0.85)' }}
-          >
-            SHIFT — dash
+            Shift·dash
           </div>
         </div>
       )}
