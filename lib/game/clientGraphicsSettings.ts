@@ -11,7 +11,7 @@ export type ClientGraphicsSettings = {
 const STORAGE_KEY = 'bit_client_graphics_v1';
 
 export const DEFAULT_CLIENT_GRAPHICS: ClientGraphicsSettings = {
-  fpsLimitEnabled: true,
+  fpsLimitEnabled: false,
   lowQualityMode: false,
 };
 
