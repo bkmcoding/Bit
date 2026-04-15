@@ -40,7 +40,7 @@ const CROSS_MS = 1900
 const BOOT_STATIC_MS = 3200
 const BOOT_TAIL_MS = 350
 /** Static grain fades out first; then menu + veil fade in (sequential, no blend fight). */
-const STATIC_FADE_OUT_MS = 2200
+const STATIC_FADE_OUT_MS = 1600
 /** Menu UI + dark veil fade-in after static has cleared. */
 const MENU_CONTENT_FADE_MS = 1650
 const INTRO_FADE_EASE = 'cubic-bezier(0.22, 0.06, 0.18, 1)'
@@ -312,11 +312,11 @@ export function MainMenu({ onStart, onClientGraphicsChange }: MainMenuProps) {
       await AudioManager.playMusic('MUSIC_MENU')
       await AudioManager.resume().catch(() => undefined)
 
-      AudioManager.crossfadeMenuStaticToMusic({
-        staticFadeOutMs: AUDIO_STATIC_FADE_OUT_MS,
-        musicFadeInMs: AUDIO_MENU_FADE_IN_MS,
-        musicDelayMs: AUDIO_MENU_FADE_DELAY_MS,
-      })
+      // AudioManager.crossfadeMenuStaticToMusic({
+      //   staticFadeOutMs: AUDIO_STATIC_FADE_OUT_MS,
+      //   musicFadeInMs: AUDIO_MENU_FADE_IN_MS,
+      //   musicDelayMs: AUDIO_MENU_FADE_DELAY_MS,
+      // })
 
       await new Promise<void>((resolve) => {
         const t0 = performance.now()

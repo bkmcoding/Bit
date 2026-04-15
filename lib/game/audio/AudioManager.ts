@@ -1958,7 +1958,7 @@ class AudioManagerClass {
     const v =
       this.settings.muted || !this.horrorOscillators.length
         ? 0
-        : 0.022 * this.settings.masterVolume * this.settings.musicVolume;
+        : 0.011 * this.settings.masterVolume * this.settings.musicVolume;
     this.horrorGain.gain.setValueAtTime(v, this.audioContext.currentTime);
   }
 
