@@ -98,6 +98,86 @@ const SECTOR0_CAPTION = {
 } as const;
 const CANVAS_UI_FONT = 'ui-monospace, "Cascadia Mono", Consolas, monospace';
 
+const SECTOR0_CAPTION_PAD_X = 10;
+const SECTOR0_CAPTION_LINE_STEP = 11;
+
+/**
+ * Target frame spacing from display refresh when available (Chrome/Edge `screen.refreshRate`),
+ * otherwise 60Hz. Caps high-refresh work to ~the panel rate and throttles further for reduced motion.
+ */
+function computeMinFrameMs(): number {
+  if (typeof window === 'undefined') return 1000 / 60;
+  let hz = 60;
+  try {
+    const r = (window.screen as Screen & { refreshRate?: number }).refreshRate;
+    if (typeof r === 'number' && r >= 30 && r <= 360) hz = r;
+  } catch {
+    /* ignore */
+  }
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    hz = Math.min(hz, 30);
+  }
+  return 1000 / hz;
+}
+
+/** Native refresh pacing; optional hard cap at 60 FPS for `fpsLimitEnabled`. */
+function resolveMinFrameMs(fpsLimitEnabled: boolean): number {
+  let ms = computeMinFrameMs();
+  if (fpsLimitEnabled) {
+    ms = Math.max(ms, 1000 / 60);
+  }
+  return ms;
+}
+
+function breakLongCaptionWord(ctx: CanvasRenderingContext2D, word: string, maxW: number): string[] {
+  const parts: string[] = [];
+  let acc = '';
+  for (const ch of word) {
+    const t = acc + ch;
+    if (ctx.measureText(t).width <= maxW) acc = t;
+    else {
+      if (acc) parts.push(acc);
+      acc = ch;
+    }
+  }
+  if (acc) parts.push(acc);
+  return parts.length ? parts : [word];
+}
+
+function wrapSector0CaptionText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxW: number
+): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [' '];
+  const words = trimmed.split(/\s+/);
+  const lines: string[] = [];
+  let cur = '';
+  for (const word of words) {
+    const candidate = cur ? `${cur} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxW) {
+      cur = candidate;
+    } else {
+      if (cur) {
+        lines.push(cur);
+        cur = '';
+      }
+      if (ctx.measureText(word).width <= maxW) {
+        cur = word;
+      } else {
+        const chunks = breakLongCaptionWord(ctx, word, maxW);
+        for (let i = 0; i < chunks.length - 1; i++) {
+          lines.push(chunks[i]!);
+        }
+        cur = chunks[chunks.length - 1] ?? '';
+      }
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [' '];
+}
+
 function sector0ZoomOutEnd(storyEnd: number): number {
   return storyEnd + SECTOR0_POST_STORY_HOLD_SEC + SECTOR0_ZOOM_OUT_SEC;
 }
@@ -216,6 +296,8 @@ export class Game {
   private ctx: CanvasRenderingContext2D;
   private lastTime: number = 0;
   private animationFrameId: number = 0;
+  /** Minimum ms between simulated+rendered frames (display refresh and optional60 FPS cap). */
+  private minFrameMs: number;
   private callbacks: GameCallbacks;
   
   // Screen shake
@@ -279,7 +361,8 @@ export class Game {
   constructor(ctx: CanvasRenderingContext2D, callbacks: GameCallbacks = {}) {
     this.ctx = ctx;
     this.callbacks = callbacks;
-    
+    this.minFrameMs = resolveMinFrameMs(true);
+
     this.input = new InputManager();
     this.roomManager = new RoomManager(this);
     this.collisionSystem = new CollisionSystem(this);
@@ -296,9 +379,20 @@ export class Game {
     this.input.attach(canvas);
   }
 
+  /** Switch pointer / keyboard target when swapping WebGL vs 2D display canvas. */
+  rebindInputCanvas(canvas: HTMLCanvasElement): void {
+    this.input.detach();
+    this.input.attach(canvas);
+  }
+
   detach(): void {
     this.input.detach();
     this.stop();
+  }
+
+  /** FPS cap (60) vs full refresh rate; call after loading client settings. */
+  applyGraphicsSettings(settings: { fpsLimitEnabled: boolean }): void {
+    this.minFrameMs = resolveMinFrameMs(settings.fpsLimitEnabled);
   }
 
   start(selectedDifficulty?: Difficulty): void {
@@ -315,10 +409,17 @@ export class Game {
   }
 
   stop(): void {
-    if (this.animationFrameId) {
+    if (this.animationFrameId !== 0) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = 0;
     }
+  }
+
+  /** Start the rAF loop if it is not already running (e.g. after returning from menu / upgrade). */
+  private ensureLoopRunning(): void {
+    if (this.animationFrameId !== 0) return;
+    this.lastTime = performance.now();
+    this.loop();
   }
 
   restart(): void {
@@ -383,18 +484,29 @@ export class Game {
       AudioManager.play('SFX_VICTORY');
       this.callbacks.onGameOver?.(true);
     }
+
+    const shouldRunLoop = newState === 'PLAYING' || newState === 'PAUSED';
+    if (shouldRunLoop) {
+      this.ensureLoopRunning();
+    } else {
+      this.stop();
+    }
   }
 
   private loop = (): void => {
+    this.animationFrameId = requestAnimationFrame(this.loop);
     const currentTime = performance.now();
-    const deltaTime = Math.min((currentTime - this.lastTime) / 1000, 0.1); // Cap at 100ms
+    const elapsed = currentTime - this.lastTime;
+    if (elapsed < this.minFrameMs) {
+      return;
+    }
+    const deltaTime = Math.min(elapsed / 1000, 0.1); // Cap at 100ms
     this.lastTime = currentTime;
 
     this.update(deltaTime);
     this.render();
-    
+
     this.input.update();
-    this.animationFrameId = requestAnimationFrame(this.loop);
   };
 
   private update(deltaTime: number): void {
@@ -753,34 +865,50 @@ export class Game {
       text = outro.text || ' ';
     }
     ctx.save();
+    ctx.font = `bold 8px ${CANVAS_UI_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const maxTextW = Math.max(40, w - SECTOR0_CAPTION_PAD_X * 2);
+    const captionLines = wrapSector0CaptionText(ctx, text, maxTextW);
+    const lineCount = captionLines.length;
+    const textBlockH = lineCount * SECTOR0_CAPTION_LINE_STEP;
+    const barHAdj = Math.max(barH, 16 + textBlockH);
+    const y0 = h - barHAdj;
+    const y = y0 + slideP * (barHAdj + 14);
+
     ctx.fillStyle = SECTOR0_CAPTION.bar;
-    const y0 = h - barH;
-    const y = y0 + slideP * (barH + 14);
     ctx.globalAlpha = 0.92 * fadeP;
-    ctx.fillRect(0, y, w, barH);
+    ctx.fillRect(0, y, w, barHAdj);
     ctx.strokeStyle = SECTOR0_CAPTION.rim;
     ctx.lineWidth = 1;
-    ctx.strokeRect(1, y + 1, w - 2, barH - 2);
+    ctx.globalAlpha = 0.92 * fadeP;
+    ctx.strokeRect(1, y + 1, w - 2, barHAdj - 2);
     ctx.strokeStyle = SECTOR0_CAPTION.rimHi;
-    ctx.globalAlpha = 0.35;
+    ctx.globalAlpha = 0.35 * 0.92 * fadeP;
     ctx.beginPath();
     ctx.moveTo(2, y + 2);
     ctx.lineTo(w - 2, y + 2);
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    ctx.font = `bold 8px ${CANVAS_UI_FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const ty = y + barH * 0.5;
     const flicker = 0.94 + 0.04 * Math.sin(this.ambiencePhase * 2.8);
     ctx.lineWidth = 2.5;
     ctx.strokeStyle = SECTOR0_CAPTION.textShadow;
-    ctx.globalAlpha = Math.min(1, flicker) * fadeP;
-    ctx.strokeText(text, w * 0.5, ty);
+    const alphaText = Math.min(1, flicker) * fadeP;
+    ctx.globalAlpha = alphaText;
+    const tyMid = y + barHAdj * 0.5;
+    const firstLineY = tyMid - (lineCount - 1) * (SECTOR0_CAPTION_LINE_STEP / 2);
+    for (let i = 0; i < lineCount; i++) {
+      const ly = firstLineY + i * SECTOR0_CAPTION_LINE_STEP;
+      const line = captionLines[i]!;
+      ctx.strokeText(line, w * 0.5, ly);
+    }
     ctx.fillStyle = SECTOR0_CAPTION.text;
-    ctx.globalAlpha = Math.min(1, flicker) * fadeP;
-    ctx.fillText(text, w * 0.5, ty);
+    ctx.globalAlpha = alphaText;
+    for (let i = 0; i < lineCount; i++) {
+      const ly = firstLineY + i * SECTOR0_CAPTION_LINE_STEP;
+      ctx.fillText(captionLines[i]!, w * 0.5, ly);
+    }
     ctx.globalAlpha = 1;
     ctx.restore();
   }

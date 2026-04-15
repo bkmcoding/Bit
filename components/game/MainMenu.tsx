@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, type MutableRefObject } from 'react'
 import { AudioManager } from '@/lib/game/audio/AudioManager'
 import type { Difficulty } from '@/lib/game/utils/constants'
-import { Volume2, VolumeX, ArrowLeft } from 'lucide-react'
+import { Volume2, VolumeX, ArrowLeft, Cog } from 'lucide-react'
 import {
   MenuBackdrop,
   MenuWebSilhouette,
@@ -13,9 +13,14 @@ import {
   MENU_FONT_STACK,
 } from '@/components/game/menuTheme'
 import { menuBitTitleFont } from '@/lib/fonts'
+import {
+  loadClientGraphicsSettings,
+  type ClientGraphicsSettings,
+} from '@/lib/game/clientGraphicsSettings'
 
 interface MainMenuProps {
   onStart: (difficulty: Difficulty) => void
+  onClientGraphicsChange?: (settings: ClientGraphicsSettings) => void
 }
 
 const DIFFICULTY_OPTIONS: { id: Difficulty; label: string; hint: string }[] = [
@@ -151,7 +156,63 @@ function useMenuShaderCanvas() {
   return ref
 }
 
-export function MainMenu({ onStart }: MainMenuProps) {
+function SettingsToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string
+  description: string
+  checked: boolean
+  onChange: (next: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-start gap-3 border-2 px-3 py-3 text-left transition-[border-color,opacity] duration-200 disabled:cursor-not-allowed disabled:opacity-45"
+      style={{
+        ...mono,
+        fontSize: '10px',
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+        color: MENU.boneDim,
+        background: `linear-gradient(180deg, ${MENU.panelHi} 0%, #0c0808 100%)`,
+        borderColor: checked ? '#6e2828' : MENU.rim,
+        boxShadow: checked
+          ? `inset 0 0 0 1px rgba(120,40,45,0.25), 0 0 12px rgba(60,20,22,0.2)`
+          : 'inset 0 2px 6px rgba(0,0,0,0.35)',
+      }}
+    >
+      <span
+        className="mt-0.5 h-4 w-4 shrink-0 border-2"
+        style={{
+          borderColor: MENU.rimHi,
+          background: checked ? MENU.blood : MENU.void,
+          boxShadow: checked ? `inset 0 0 0 2px ${MENU.void}` : 'none',
+        }}
+        aria-hidden
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block" style={{ color: checked ? MENU.bone : MENU.boneDim }}>
+          {label}
+        </span>
+        <span
+          className="mt-1 block normal-case tracking-normal"
+          style={{ color: MENU.whisper, fontSize: '11px', lineHeight: 1.45 }}
+        >
+          {description}
+        </span>
+      </span>
+    </button>
+  )
+}
+
+export function MainMenu({ onStart, onClientGraphicsChange }: MainMenuProps) {
   const [awaitingStandby, setAwaitingStandby] = useState(true)
   const [introOpaque, setIntroOpaque] = useState(true)
   const [introLayerMounted, setIntroLayerMounted] = useState(true)
@@ -162,6 +223,11 @@ export function MainMenu({ onStart }: MainMenuProps) {
   const [isStarting, setIsStarting] = useState(false)
   const [difficulty, setDifficulty] = useState<Difficulty>('medium')
   const [phase, setPhase] = useState<'title' | 'setup'>('title')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [graphics, setGraphics] = useState<ClientGraphicsSettings>(() => loadClientGraphicsSettings())
+  const [masterPct, setMasterPct] = useState(70)
+  const [musicPct, setMusicPct] = useState(74)
+  const [sfxPct, setSfxPct] = useState(88)
 
   const justPoweredOnRef = useRef(false)
   /** Released on effect cleanup so Strict Mode can run a second boot attempt. */
@@ -313,6 +379,34 @@ export function MainMenu({ onStart }: MainMenuProps) {
   const toggleMute = () => {
     const newMuted = AudioManager.toggleMute()
     setIsMuted(newMuted)
+  }
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    void AudioManager.initialize().then(() => {
+      const a = AudioManager.getSettings()
+      setIsMuted(a.muted)
+      setMasterPct(Math.round(a.masterVolume * 100))
+      setMusicPct(Math.round(a.musicVolume * 100))
+      setSfxPct(Math.round(a.sfxVolume * 100))
+    })
+  }, [settingsOpen])
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Escape') {
+        e.preventDefault()
+        setSettingsOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [settingsOpen])
+
+  const pushGraphics = (next: ClientGraphicsSettings) => {
+    setGraphics(next)
+    onClientGraphicsChange?.(next)
   }
 
   const introFadeDone = (e: React.TransitionEvent<HTMLDivElement>) => {
@@ -475,8 +569,27 @@ export function MainMenu({ onStart }: MainMenuProps) {
       )}
 
       <button
-        onClick={toggleMute}
+        type="button"
+        onClick={() => setSettingsOpen(true)}
         className={`absolute top-4 right-4 z-30 p-2.5 transition-all ease-in-out ${
+          menuRevealed ? 'pointer-events-auto opacity-100 translate-y-0' : 'pointer-events-none opacity-0'
+        }`}
+        style={{
+          transitionDuration: `${Math.min(800, MENU_CONTENT_FADE_MS)}ms`,
+          transitionDelay: menuRevealed ? '200ms' : '0ms',
+          background: `linear-gradient(180deg, ${MENU.panelHi} 0%, ${MENU.panel} 100%)`,
+          border: `2px solid ${MENU.rim}`,
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05), 0 2px 0 #080404',
+        }}
+        aria-label="Settings"
+      >
+        <Cog className="h-5 w-5" style={{ color: MENU.boneDim }} />
+      </button>
+
+      <button
+        type="button"
+        onClick={toggleMute}
+        className={`absolute top-4 right-[3.75rem] z-30 p-2.5 transition-all ease-in-out sm:right-[4.25rem] ${
           menuRevealed ? 'pointer-events-auto opacity-100 translate-y-0' : 'pointer-events-none opacity-0'
         }`}
         style={{
@@ -494,6 +607,117 @@ export function MainMenu({ onStart }: MainMenuProps) {
           <Volume2 className="h-5 w-5" style={{ color: MENU.boneDim }} />
         )}
       </button>
+
+      {settingsOpen && (
+        <div
+          className="absolute inset-0 z-[45] flex items-center justify-center bg-black/72 p-4 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="menu-settings-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSettingsOpen(false)
+          }}
+        >
+          <MenuPanel className="relative max-h-[min(90vh,520px)] w-full max-w-md overflow-y-auto">
+            <button
+              type="button"
+              className="absolute right-2 top-2 border-0 bg-transparent px-2 py-1 text-[11px] uppercase tracking-[0.2em] transition-colors"
+              style={{ color: MENU.whisper, ...mono }}
+              onClick={() => setSettingsOpen(false)}
+            >
+              Esc
+            </button>
+            <h2
+              id="menu-settings-title"
+              className="pr-10 text-center text-[11px] uppercase tracking-[0.4em] sm:text-xs"
+              style={{ color: MENU.boneDim, ...mono }}
+            >
+              Settings
+            </h2>
+
+            <div className="mt-5 space-y-4">
+              <p className="text-[10px] uppercase tracking-[0.4em]" style={{ color: MENU.whisper, ...mono }}>
+                Audio
+              </p>
+              <label className="block space-y-1.5">
+                <span className="text-[11px]" style={{ color: MENU.boneDim, ...mono }}>
+                  Master {masterPct}%
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={masterPct}
+                  className="w-full accent-[#6e2828]"
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    setMasterPct(v)
+                    AudioManager.setMasterVolume(v / 100)
+                  }}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[11px]" style={{ color: MENU.boneDim, ...mono }}>
+                  Music {musicPct}%
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={musicPct}
+                  className="w-full accent-[#6e2828]"
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    setMusicPct(v)
+                    AudioManager.setMusicVolume(v / 100)
+                  }}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[11px]" style={{ color: MENU.boneDim, ...mono }}>
+                  Sound effects {sfxPct}%
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={sfxPct}
+                  className="w-full accent-[#6e2828]"
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    setSfxPct(v)
+                    AudioManager.setSfxVolume(v / 100)
+                  }}
+                />
+              </label>
+            </div>
+
+            <div className="mt-6 space-y-3">
+              <p className="text-[10px] uppercase tracking-[0.4em]" style={{ color: MENU.whisper, ...mono }}>
+                Video
+              </p>
+              <SettingsToggleRow
+                label="Cap at 60 FPS"
+                description="Limits frame pacing to 60 FPS to ease GPU load on high-refresh monitors. Off uses your display refresh when available."
+                checked={graphics.fpsLimitEnabled}
+                onChange={(v) => pushGraphics({ ...graphics, fpsLimitEnabled: v })}
+              />
+              <SettingsToggleRow
+                label="Low quality mode"
+                description="Skips the WebGL post pass and uses the simpler 2D presentation path."
+                checked={graphics.lowQualityMode}
+                onChange={(v) => pushGraphics({ ...graphics, lowQualityMode: v })}
+              />
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <MenuBtn variant="enter" className="px-8 py-3 text-[11px]" onClick={() => setSettingsOpen(false)}>
+                Done
+              </MenuBtn>
+            </div>
+          </MenuPanel>
+        </div>
+      )}
 
       <div
         className={`main-menu-pixel relative z-10 h-full min-h-0 w-full max-w-lg ${

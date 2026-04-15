@@ -7,7 +7,16 @@ import { ROOM_COUNT, type MinimapLayout } from '@/lib/game/rooms/roomData';
 import type { Upgrade } from '@/lib/game/upgrades/Upgrade';
 import { Vector2 } from '@/lib/game/utils/Vector2';
 import { AudioManager } from '@/lib/game/audio/AudioManager';
-import { createGameGlPresenter } from '@/lib/game/rendering/webglHorrorPresent';
+import {
+  createGameGlPresenter,
+  type GameGlPresenter,
+  type GamePostUniforms,
+} from '@/lib/game/rendering/webglHorrorPresent';
+import {
+  loadClientGraphicsSettings,
+  saveClientGraphicsSettings,
+  type ClientGraphicsSettings,
+} from '@/lib/game/clientGraphicsSettings';
 import { GameUI } from './GameUI';
 import { MainMenu } from './MainMenu';
 import { PauseMenu } from './PauseMenu';
@@ -72,6 +81,27 @@ export function GameCanvas() {
     gameStateRef.current = gameState;
   }, [gameState]);
 
+  const presenterRef = useRef<GameGlPresenter | null>(null);
+  const presentFnRef = useRef<
+    ((source: HTMLCanvasElement, uniforms: GamePostUniforms) => void) | null
+  >(null);
+
+  const syncGraphicsPresentation = useCallback((s: ClientGraphicsSettings) => {
+    saveClientGraphicsSettings(s);
+    const game = gameRef.current;
+    const buffer = bufferRef.current;
+    const glCanvas = glRef.current;
+    if (!game || !buffer || !glCanvas) return;
+    game.applyGraphicsSettings({ fpsLimitEnabled: s.fpsLimitEnabled });
+    const presenter = presenterRef.current;
+    const useWeb = Boolean(presenter) && !s.lowQualityMode;
+    presentFnRef.current = useWeb
+      ? (src, u) => presenter!.present(src, u)
+      : null;
+    setDisplayMode(useWeb ? 'webgl' : 'canvas2d');
+    game.rebindInputCanvas(useWeb ? glCanvas : buffer);
+  }, []);
+
   /** Unmutes policy-muted HTML menu audio and resumes Web Audio; runs once per page load. */
   const audioGestureDoneRef = useRef(false);
   const primeAudioFromGesture = useCallback(() => {
@@ -107,7 +137,14 @@ export function GameCanvas() {
     ctx.imageSmoothingEnabled = false;
 
     const presenter = createGameGlPresenter(glCanvas);
-    setDisplayMode(presenter ? 'webgl' : 'canvas2d');
+    presenterRef.current = presenter;
+
+    const graphics = loadClientGraphicsSettings();
+    const useWebGl = Boolean(presenter) && !graphics.lowQualityMode;
+    presentFnRef.current = useWebGl
+      ? (src, u) => presenter!.present(src, u)
+      : null;
+    setDisplayMode(useWebGl ? 'webgl' : 'canvas2d');
 
     const game = new Game(ctx, {
       onStateChange: setGameState,
@@ -116,11 +153,12 @@ export function GameCanvas() {
       onUpgradeSelect: setUpgrades,
       onGameOver: (victory) => setIsVictory(victory),
       onDevPanelChange: setDevHud,
-      onPresentFrame: presenter ? (src, u) => presenter.present(src, u) : undefined,
+      onPresentFrame: (src, u) => presentFnRef.current?.(src, u),
       onSector0Intro: setSector0IntroActive,
     });
 
-    game.attach(presenter ? glCanvas : buffer);
+    game.attach(useWebGl ? glCanvas : buffer);
+    game.applyGraphicsSettings({ fpsLimitEnabled: graphics.fpsLimitEnabled });
     gameRef.current = game;
 
     /** Dev unlock must run here: the game loop is not active on the main menu before the first run. */
@@ -136,6 +174,8 @@ export function GameCanvas() {
     return () => {
       document.removeEventListener('keydown', onDevChord, true);
       presenter?.dispose();
+      presenterRef.current = null;
+      presentFnRef.current = null;
       game.detach();
       gameRef.current = null;
     };
@@ -303,7 +343,9 @@ export function GameCanvas() {
         )}
 
         {/* Main Menu */}
-        {gameState === 'MENU' && <MainMenu onStart={handleStart} />}
+        {gameState === 'MENU' && (
+          <MainMenu onStart={handleStart} onClientGraphicsChange={syncGraphicsPresentation} />
+        )}
 
         {/* Pause Menu */}
         {gameState === 'PAUSED' && (
