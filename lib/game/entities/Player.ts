@@ -110,8 +110,8 @@ export class Player extends Entity {
       this.velocity.y = 0;
       this.legOffset *= 0.88;
       this.fireCooldown -= deltaTime;
-      const aimMouse = this.game.getAimMousePosition();
-      this.facingAngle = this.position.angleTo(aimMouse);
+      const aimDir = input.getAimDirection(this.position);
+      this.facingAngle = Math.atan2(aimDir.y, aimDir.x);
       if (this.isInvulnerable) {
         this.invulnerableTime -= deltaTime;
         if (this.invulnerableTime <= 0) {
@@ -142,9 +142,9 @@ export class Player extends Entity {
 
       if (tryDash) {
         const moveDir = input.getMovementDirection();
-        const aim = this.game.getAimMousePosition().sub(this.position);
-        const aimDir = aim.magnitudeSq() > 4 ? aim.normalize() : new Vector2(1, 0);
-        this.dashDir = moveDir.magnitudeSq() > 0.01 ? moveDir.clone() : aimDir;
+        const aimDir = input.getAimDirection(this.position);
+        const fallbackAim = aimDir.magnitudeSq() > 0.0001 ? aimDir : new Vector2(1, 0);
+        this.dashDir = moveDir.magnitudeSq() > 0.01 ? moveDir.clone() : fallbackAim;
         this.dashStamina -= PLAYER.DASH_STAMINA_COST;
         this.dashCooldown = PLAYER.DASH_COOLDOWN_SEC;
         this.dashBurstRemaining = PLAYER.DASH_BURST_SEC;
@@ -197,8 +197,8 @@ export class Player extends Entity {
       }
     }
     
-    const aimMouse = this.game.getAimMousePosition();
-    this.facingAngle = this.position.angleTo(aimMouse);
+    const aimDir = input.getAimDirection(this.position);
+    this.facingAngle = Math.atan2(aimDir.y, aimDir.x);
     
     // Shooting
     this.fireCooldown -= deltaTime;
@@ -226,8 +226,7 @@ export class Player extends Entity {
 
   private shoot(): void {
     AudioManager.play('SFX_SHOOT');
-    const aimMouse = this.game.getAimMousePosition();
-    const aimDir = aimMouse.sub(this.position).normalize();
+    const aimDir = this.game.input.getAimDirection(this.position);
     this.spawnBullet(aimDir);
   }
 

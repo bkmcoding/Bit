@@ -10,6 +10,9 @@ export class InputManager {
   private mouseDown: boolean = false;
   private mouseJustPressed: boolean = false;
   private mouseJustReleased: boolean = false;
+  private virtualMoveDir: Vector2 = new Vector2();
+  private virtualAimDir: Vector2 | null = null;
+  private virtualFire = false;
   
   private canvas: HTMLCanvasElement | null = null;
   
@@ -138,7 +141,7 @@ export class InputManager {
 
   // Mouse state queries
   isMouseDown(): boolean {
-    return this.mouseDown;
+    return this.mouseDown || this.virtualFire;
   }
 
   isMouseJustPressed(): boolean {
@@ -155,6 +158,9 @@ export class InputManager {
 
   // Movement helper — opposing keys on an axis cancel (no net horizontal/vertical).
   getMovementDirection(): Vector2 {
+    if (this.virtualMoveDir.magnitudeSq() > 0.0001) {
+      return this.virtualMoveDir.clone();
+    }
     const dir = new Vector2();
 
     const up = this.isKeyDown('w') || this.isKeyDown('arrowup');
@@ -174,6 +180,39 @@ export class InputManager {
 
   // Get aim direction from position to mouse
   getAimDirection(fromPosition: Vector2): Vector2 {
+    if (this.virtualAimDir && this.virtualAimDir.magnitudeSq() > 0.0001) {
+      return this.virtualAimDir.clone();
+    }
     return this.mousePosition.sub(fromPosition).normalize();
+  }
+
+  setVirtualMovementDirection(direction: Vector2 | null): void {
+    if (!direction || direction.magnitudeSq() <= 0.0001) {
+      this.virtualMoveDir.set(0, 0);
+      return;
+    }
+    this.virtualMoveDir = direction.clone();
+    if (this.virtualMoveDir.magnitudeSq() > 1) {
+      this.virtualMoveDir.normalizeMut();
+    }
+  }
+
+  setVirtualAimDirection(direction: Vector2 | null, firing: boolean): void {
+    if (!direction || direction.magnitudeSq() <= 0.0001) {
+      this.virtualAimDir = null;
+      this.virtualFire = false;
+      return;
+    }
+    this.virtualAimDir = direction.clone();
+    if (this.virtualAimDir.magnitudeSq() > 1) {
+      this.virtualAimDir.normalizeMut();
+    }
+    this.virtualFire = firing;
+  }
+
+  clearVirtualControls(): void {
+    this.virtualMoveDir.set(0, 0);
+    this.virtualAimDir = null;
+    this.virtualFire = false;
   }
 }

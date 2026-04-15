@@ -186,8 +186,34 @@ export class RoomManager {
     }
 
     const minComfort = 20;
+    const minMoveFreedom = 3;
 
-    type Scored = { p: Vector2; minEdge: number; doorDist: number };
+    const minObstacleEdgeDistance = (p: Vector2): number => {
+      let best = Number.POSITIVE_INFINITY;
+      for (const o of obs) {
+        const cx = Math.max(o.x, Math.min(o.x + o.w, p.x));
+        const cy = Math.max(o.y, Math.min(o.y + o.h, p.y));
+        const d = Math.hypot(p.x - cx, p.y - cy) - ph;
+        if (d < best) best = d;
+      }
+      return Number.isFinite(best) ? best : 999;
+    };
+
+    const hasMovementFreedom = (p: Vector2): boolean => {
+      const step = Math.max(8, ph + 3);
+      let freeDirs = 0;
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI * 2 * i) / 8;
+        const q = new Vector2(p.x + Math.cos(a) * step, p.y + Math.sin(a) * step);
+        this.clampPointToPlayfield(q, ph, room);
+        if (!circleOverlapsObstacle(q.x, q.y, ph - 0.2, obs)) {
+          freeDirs++;
+        }
+      }
+      return freeDirs >= minMoveFreedom;
+    };
+
+    type Scored = { p: Vector2; minEdge: number; obsEdge: number; doorDist: number };
     const scored: Scored[] = [];
 
     for (const raw of candidates) {
@@ -198,20 +224,31 @@ export class RoomManager {
         this.clampPointToPlayfield(p, ph, room);
       }
       if (circleOverlapsObstacle(p.x, p.y, ph - 0.25, obs)) continue;
+      if (!hasMovementFreedom(p)) continue;
       let minEdge = 1e9;
       for (const e of this.game.enemies) {
         if (!e.isActive || e.markedForDeletion) continue;
         const edge = p.distanceTo(e.position) - ph - e.size / 2;
         minEdge = Math.min(minEdge, edge);
       }
-      scored.push({ p, minEdge, doorDist: p.distanceTo(doorSpawn) });
+      const obsEdge = minObstacleEdgeDistance(p);
+      scored.push({ p, minEdge, obsEdge, doorDist: p.distanceTo(doorSpawn) });
     }
 
-    if (scored.length === 0) return doorSpawn.clone();
+    if (scored.length === 0) {
+      const fallback = safe.clone();
+      this.clampPointToPlayfield(fallback, ph, room);
+      for (let k = 0; k < 5; k++) {
+        resolveCircleObstacles(fallback, ph, obs);
+        this.clampPointToPlayfield(fallback, ph, room);
+      }
+      return fallback;
+    }
 
-    const ok = scored.filter((s) => s.minEdge >= minComfort);
+    const ok = scored.filter((s) => s.minEdge >= minComfort && s.obsEdge >= 2);
     const pool = ok.length > 0 ? ok : scored;
     pool.sort((a, b) => {
+      if (b.obsEdge !== a.obsEdge) return b.obsEdge - a.obsEdge;
       if (a.doorDist !== b.doorDist) return a.doorDist - b.doorDist;
       return b.minEdge - a.minEdge;
     });

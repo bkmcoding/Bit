@@ -96,6 +96,7 @@ const SECTOR0_CAPTION = {
   textDim: '#8a7a70',
   textShadow: '#0a0606',
 } as const;
+const CANVAS_UI_FONT = 'ui-monospace, "Cascadia Mono", Consolas, monospace';
 
 function sector0ZoomOutEnd(storyEnd: number): number {
   return storyEnd + SECTOR0_POST_STORY_HOLD_SEC + SECTOR0_ZOOM_OUT_SEC;
@@ -635,7 +636,7 @@ export class Game {
     if (!s) return;
     const w = GAME.BUFFER_WIDTH;
     ctx.save();
-    ctx.font = 'bold 8px ui-monospace, "Cascadia Mono", Consolas, monospace';
+    ctx.font = `bold 8px ${CANVAS_UI_FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     const label = 'HOLD SPACE TO SKIP';
@@ -768,7 +769,7 @@ export class Game {
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    ctx.font = 'bold 8px ui-monospace, "Cascadia Mono", Consolas, monospace';
+    ctx.font = `bold 8px ${CANVAS_UI_FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const ty = y + barH * 0.5;
@@ -851,13 +852,13 @@ export class Game {
     ctx.fillRect(0, h - bar, w, bar);
     const title =
       this.bossIntro.kind === 'broodmother' ? 'BROODMOTHER' : 'TRENCH MATRIARCH';
-    ctx.font = 'bold 9px monospace';
+    ctx.font = `bold 9px ${CANVAS_UI_FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = `rgba(230, 210, 255, ${0.42 + 0.38 * Math.sin(this.ambiencePhase * 2.2)})`;
     ctx.fillText(title, w * 0.5, bar * 0.5 + 1);
     const subtitle = this.bossIntro.kind === 'broodmother' ? 'SECTOR 12' : 'ABYSS';
-    ctx.font = '6px monospace';
+    ctx.font = `6px ${CANVAS_UI_FONT}`;
     ctx.fillStyle = 'rgba(160, 150, 190, 0.55)';
     ctx.fillText(subtitle, w * 0.5, h - bar * 0.5 + 1);
     ctx.restore();

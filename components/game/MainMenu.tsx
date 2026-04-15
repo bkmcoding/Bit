@@ -4,7 +4,15 @@ import { useState, useEffect, useRef, useCallback, type MutableRefObject } from 
 import { AudioManager } from '@/lib/game/audio/AudioManager'
 import type { Difficulty } from '@/lib/game/utils/constants'
 import { Volume2, VolumeX, ArrowLeft } from 'lucide-react'
-import { MenuBackdrop, MenuWebSilhouette, MenuPanel, MenuBtn, MENU } from '@/components/game/menuTheme'
+import {
+  MenuBackdrop,
+  MenuWebSilhouette,
+  MenuPanel,
+  MenuBtn,
+  MENU,
+  MENU_FONT_STACK,
+} from '@/components/game/menuTheme'
+import { menuBitTitleFont } from '@/lib/fonts'
 
 interface MainMenuProps {
   onStart: (difficulty: Difficulty) => void
@@ -20,7 +28,7 @@ const DIFFICULTY_OPTIONS: { id: Difficulty; label: string; hint: string }[] = [
   },
 ]
 
-const mono = { fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", monospace' } as const
+const mono = { fontFamily: MENU_FONT_STACK } as const
 
 const CROSS_MS = 1900
 /** Full-screen static only, then auto-fade into menu (never blocked on audio resume). */
@@ -100,6 +108,49 @@ function useWhiteNoiseCanvas(staticBleedRef: MutableRefObject<number>) {
   return ref
 }
 
+/** Lightweight menu shader pass: chromatic crawl + scan shimmer. */
+function useMenuShaderCanvas() {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    let raf = 0
+    const draw = (t: number) => {
+      const c = ref.current
+      if (!c) return
+      const w = 240
+      const h = 144
+      if (c.width !== w || c.height !== h) {
+        c.width = w
+        c.height = h
+      }
+      const ctx = c.getContext('2d')
+      if (!ctx) return
+      const tm = t * 0.001
+      ctx.clearRect(0, 0, w, h)
+
+      for (let x = 0; x < w; x += 2) {
+        const p = x / w
+        const wave = Math.sin(tm * 1.4 + p * 12.5) * 0.5 + 0.5
+        ctx.fillStyle = `rgba(${Math.floor(65 + wave * 60)}, ${Math.floor(
+          20 + wave * 24
+        )}, ${Math.floor(86 + wave * 48)}, 0.1)`
+        ctx.fillRect(x, 0, 1, h)
+      }
+
+      for (let y = 0; y < h; y += 4) {
+        const p = y / h
+        const a = 0.03 + (Math.sin(tm * 2.3 + p * 18) * 0.5 + 0.5) * 0.075
+        ctx.fillStyle = `rgba(255,255,255,${a})`
+        ctx.fillRect(0, y, w, 1)
+      }
+
+      raf = requestAnimationFrame(draw)
+    }
+    raf = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return ref
+}
+
 export function MainMenu({ onStart }: MainMenuProps) {
   const [awaitingStandby, setAwaitingStandby] = useState(true)
   const [introOpaque, setIntroOpaque] = useState(true)
@@ -118,6 +169,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
   const staticBleedRef = useRef(0)
   const bleedInRafRef = useRef<number | null>(null)
   const noiseRef = useWhiteNoiseCanvas(staticBleedRef)
+  const shaderRef = useMenuShaderCanvas()
 
   const handleTvPowerOn = useCallback(async () => {
     try {
@@ -281,7 +333,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
       <MenuWebSilhouette />
 
       <div
-        className="pointer-events-none absolute inset-0 z-[1] opacity-[0.14]"
+        className="pointer-events-none absolute inset-0 z-1 opacity-[0.14]"
         style={{
           backgroundImage: `
             linear-gradient(rgba(0,0,0,0.45) 1px, transparent 1px),
@@ -294,9 +346,18 @@ export function MainMenu({ onStart }: MainMenuProps) {
 
       <canvas
         ref={noiseRef}
-        className="pointer-events-none absolute inset-0 z-[2] h-full w-full"
+        className="pointer-events-none absolute inset-0 z-2 h-full w-full"
         style={{
           imageRendering: 'pixelated',
+        }}
+      />
+      <canvas
+        ref={shaderRef}
+        className="pointer-events-none absolute inset-0 z-3 h-full w-full opacity-50"
+        style={{
+          imageRendering: 'pixelated',
+          mixBlendMode: 'screen',
+          filter: 'saturate(1.1) contrast(1.06)',
         }}
       />
 
@@ -322,14 +383,21 @@ export function MainMenu({ onStart }: MainMenuProps) {
           45% { opacity: 0.14; filter: brightness(0.65); }
           50% { opacity: 0.14; filter: brightness(0.65); }
         }
-        @keyframes tv-click-hint {
-          0%, 100% { opacity: 0.22; }
-          50% { opacity: 1; }
+        /* Same phase as tv-standby-blink (dim together with the LED). */
+        @keyframes tv-standby-click-sync {
+          0%, 100% { opacity: 1; }
+          45%, 50% { opacity: 0.22; }
         }
         .main-menu-pixel {
           image-rendering: pixelated;
           image-rendering: crisp-edges;
           -webkit-font-smoothing: antialiased;
+        }
+        .main-menu-title-bit {
+          text-transform: uppercase;
+          -webkit-font-smoothing: none;
+          -moz-osx-font-smoothing: grayscale;
+          font-smooth: never;
         }
         .main-menu-setup-scroll {
           scrollbar-width: thin;
@@ -347,7 +415,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
       `}</style>
 
       <div
-        className="pointer-events-none absolute inset-0 z-[1]"
+        className="pointer-events-none absolute inset-0 z-1"
         style={{
           animation: 'bit-drift 14s ease-in-out infinite',
           background: `radial-gradient(ellipse 40% 30% at 70% 20%, rgba(60,20,24,0.22) 0%, transparent 70%)`,
@@ -357,7 +425,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
       {awaitingStandby && (
         <button
           type="button"
-          className="absolute inset-0 z-[50] flex cursor-pointer flex-col items-center justify-center gap-8 border-0 bg-[#020101] p-8 outline-none focus-visible:ring-2 focus-visible:ring-[#5a2828] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+          className="absolute inset-0 z-50 flex cursor-pointer flex-col items-center justify-center gap-8 border-0 bg-[#020101] p-8 outline-none focus-visible:ring-2 focus-visible:ring-[#5a2828] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
           onClick={handleTvPowerOn}
           aria-label="Click to power on the display"
         >
@@ -453,14 +521,12 @@ export function MainMenu({ onStart }: MainMenuProps) {
             style={{ transitionDuration: '1200ms', transitionDelay: '120ms' }}
           >
             <h1
-              className="text-center text-7xl font-bold leading-none tracking-tight sm:text-8xl md:text-9xl"
+              className={`main-menu-title-bit main-menu-pixel text-center text-6xl leading-none tracking-[0.1em] sm:text-7xl md:text-8xl ${menuBitTitleFont.className}`}
               style={{
-                ...mono,
-                color: '#2a2220',
-                letterSpacing: '-0.04em',
+                color: '#5b5048',
                 animation: 'bit-breathe 5s ease-in-out infinite, bit-flicker 7s linear infinite',
                 textShadow: `
-                  0 0 42px rgba(120, 30, 35, 0.45),
+                  0 0 56px rgba(120, 30, 35, 0.6),
                   0 0 2px rgba(0,0,0,1),
                   3px 3px 0 #0a0606,
                   -1px -1px 0 #1a1010,
@@ -468,7 +534,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
                 `,
               }}
             >
-              Bit
+              BIT
             </h1>
             <div
               className="pointer-events-none absolute -inset-x-8 -bottom-2 h-8 opacity-50"
@@ -481,7 +547,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
 
           <div className="flex flex-col items-center gap-8">
             <p
-              className={`max-w-md text-center text-base leading-relaxed sm:text-lg transition-opacity ease-out ${
+              className={`max-w-md text-center text-[13px] leading-relaxed sm:text-[15px] transition-opacity ease-out ${
                 isVisible ? 'opacity-100' : 'opacity-0'
               }`}
               style={{
@@ -496,7 +562,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
             </p>
 
             <div
-              className={`transition-[opacity,transform] duration-[1100ms] ease-out ${
+              className={`transition-[opacity,transform] duration-1100 ease-out ${
                 isVisible ? 'translate-y-0 opacity-100' : 'translate-y-8 opacity-0'
               }`}
               style={{ transitionDelay: '400ms' }}
@@ -551,7 +617,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
                     disabled={isStarting}
                     onClick={() => setDifficulty(opt.id)}
                     title={opt.hint}
-                    className="min-h-[44px] flex-1 border-2 px-4 py-3 text-left transition-[box-shadow,filter,border-color] duration-300 disabled:opacity-50 sm:min-w-[100px] sm:flex-none"
+                    className="min-h-11 flex-1 border-2 px-4 py-3 text-left transition-[box-shadow,filter,border-color] duration-300 disabled:opacity-50 sm:min-w-25 sm:flex-none"
                     style={{
                       ...mono,
                       fontSize: '11px',

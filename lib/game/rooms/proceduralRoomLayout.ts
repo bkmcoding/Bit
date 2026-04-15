@@ -26,6 +26,11 @@ const SHAPES = [
   'plus',
   'canals',
   'pump-lanes',
+  'ring-lane',
+  'double-chamber-h',
+  'double-chamber-v',
+  'snake-h',
+  'snake-v',
 ] as const;
 type RoomShape = (typeof SHAPES)[number];
 const FURNISH = [
@@ -36,8 +41,15 @@ const FURNISH = [
   'center_cistern',
   'pump_cross',
   'spill_channels',
+  'pillar_cluster',
+  'broken_walls',
+  'alcove_pairs',
 ] as const;
 type FurnishKind = (typeof FURNISH)[number];
+const BOSS_ARENA_ENEMIES: ReadonlySet<SpawnPoint['enemyType']> = new Set([
+  'broodmother',
+  'trenchmatriarch',
+]);
 
 function mulberry32(seed: number): () => number {
   return () => {
@@ -53,12 +65,11 @@ function quantize8(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, q));
 }
 
-function pickDimensions(seed: number, isBoss: boolean): { width: number; height: number } {
+function pickDimensions(seed: number, isBossArena: boolean): { width: number; height: number } {
   const rng = mulberry32(seed ^ 0x9e3779b9);
-  if (isBoss) {
-    const w = quantize8(312 + Math.floor(rng() * 48), 304, GAME.BUFFER_WIDTH);
-    const h = quantize8(184 + Math.floor(rng() * 32), 176, GAME.BUFFER_HEIGHT);
-    return { width: w, height: h };
+  if (isBossArena) {
+    // Always full-size arena for boss fights (no cramped corridor variants).
+    return { width: GAME.BUFFER_WIDTH, height: GAME.BUFFER_HEIGHT };
   }
   const minW = 256;
   const maxW = GAME.BUFFER_WIDTH;
@@ -182,6 +193,67 @@ function stampPumpLanes(walk: boolean[][], tw: number, th: number, mt: number): 
   fillRectWalk(walk, cx - laneW, mt + 1, cx + laneW + 1, th - mt - 1, true);
 }
 
+function stampRingLane(walk: boolean[][], tw: number, th: number, mt: number): void {
+  fillRectWalk(walk, mt, mt, tw - mt, th - mt, true);
+  // Carve a center void, then punch cross links so it becomes a looped arena.
+  const insetX = Math.max(4, Math.floor((tw - 2 * mt) * 0.22));
+  const insetY = Math.max(3, Math.floor((th - 2 * mt) * 0.2));
+  const ix0 = mt + insetX;
+  const iy0 = mt + insetY;
+  const ix1 = tw - mt - insetX;
+  const iy1 = th - mt - insetY;
+  fillRectWalk(walk, ix0, iy0, ix1, iy1, false);
+  const cx = Math.floor(tw / 2);
+  const cy = Math.floor(th / 2);
+  fillRectWalk(walk, cx - 1, mt, cx + 2, th - mt, true);
+  fillRectWalk(walk, mt, cy - 1, tw - mt, cy + 2, true);
+}
+
+function stampDoubleChamberH(walk: boolean[][], tw: number, th: number, mt: number): void {
+  fillRectWalk(walk, mt, mt, tw - mt, th - mt, true);
+  const split = Math.floor(tw / 2);
+  // Center divider with top/mid/bottom openings.
+  fillRectWalk(walk, split - 1, mt + 1, split + 2, th - mt - 1, false);
+  const gapH = Math.max(2, Math.floor((th - 2 * mt) * 0.14));
+  const cy = Math.floor(th / 2);
+  fillRectWalk(walk, split - 1, mt + 1, split + 2, mt + 1 + gapH, true);
+  fillRectWalk(walk, split - 1, cy - 1, split + 2, cy + 2, true);
+  fillRectWalk(walk, split - 1, th - mt - 1 - gapH, split + 2, th - mt - 1, true);
+}
+
+function stampDoubleChamberV(walk: boolean[][], tw: number, th: number, mt: number): void {
+  fillRectWalk(walk, mt, mt, tw - mt, th - mt, true);
+  const split = Math.floor(th / 2);
+  fillRectWalk(walk, mt + 1, split - 1, tw - mt - 1, split + 2, false);
+  const gapW = Math.max(2, Math.floor((tw - 2 * mt) * 0.14));
+  const cx = Math.floor(tw / 2);
+  fillRectWalk(walk, mt + 1, split - 1, mt + 1 + gapW, split + 2, true);
+  fillRectWalk(walk, cx - 1, split - 1, cx + 2, split + 2, true);
+  fillRectWalk(walk, tw - mt - 1 - gapW, split - 1, tw - mt - 1, split + 2, true);
+}
+
+function stampSnakeH(walk: boolean[][], tw: number, th: number, mt: number): void {
+  fillRectWalk(walk, mt, mt, tw - mt, th - mt, false);
+  const lane = 3;
+  const rows = [mt + 2, Math.floor(th / 2) - 1, th - mt - 5];
+  fillRectWalk(walk, mt + 1, rows[0], tw - mt - 1, rows[0] + lane, true);
+  fillRectWalk(walk, mt + 1, rows[1], tw - mt - 1, rows[1] + lane, true);
+  fillRectWalk(walk, mt + 1, rows[2], tw - mt - 1, rows[2] + lane, true);
+  fillRectWalk(walk, tw - mt - 5, rows[0], tw - mt - 2, rows[1] + lane, true);
+  fillRectWalk(walk, mt + 2, rows[1], mt + 5, rows[2] + lane, true);
+}
+
+function stampSnakeV(walk: boolean[][], tw: number, th: number, mt: number): void {
+  fillRectWalk(walk, mt, mt, tw - mt, th - mt, false);
+  const lane = 3;
+  const cols = [mt + 2, Math.floor(tw / 2) - 1, tw - mt - 5];
+  fillRectWalk(walk, cols[0], mt + 1, cols[0] + lane, th - mt - 1, true);
+  fillRectWalk(walk, cols[1], mt + 1, cols[1] + lane, th - mt - 1, true);
+  fillRectWalk(walk, cols[2], mt + 1, cols[2] + lane, th - mt - 1, true);
+  fillRectWalk(walk, cols[0], th - mt - 5, cols[1] + lane, th - mt - 2, true);
+  fillRectWalk(walk, cols[1], mt + 2, cols[2] + lane, mt + 5, true);
+}
+
 function doorAnchorsOk(
   walk: boolean[][],
   tw: number,
@@ -267,6 +339,26 @@ function stampShape(
   }
   if (shape === 'pump-lanes') {
     stampPumpLanes(walk, tw, th, mt);
+    return;
+  }
+  if (shape === 'ring-lane') {
+    stampRingLane(walk, tw, th, mt);
+    return;
+  }
+  if (shape === 'double-chamber-h') {
+    stampDoubleChamberH(walk, tw, th, mt);
+    return;
+  }
+  if (shape === 'double-chamber-v') {
+    stampDoubleChamberV(walk, tw, th, mt);
+    return;
+  }
+  if (shape === 'snake-h') {
+    stampSnakeH(walk, tw, th, mt);
+    return;
+  }
+  if (shape === 'snake-v') {
+    stampSnakeV(walk, tw, th, mt);
     return;
   }
   const bumpH = 3 + Math.floor(rng() * 2);
@@ -435,6 +527,40 @@ function placeStructuredProps(
     return out;
   }
 
+  if (kind === 'pillar_cluster') {
+    const cx = Math.floor((ix0 + ix1) / 2);
+    const cy = Math.floor((iy0 + iy1) / 2);
+    const sz = 10;
+    const off = 16;
+    tryPush({ x: cx - off - sz / 2, y: cy - off - sz / 2, w: sz, h: sz });
+    tryPush({ x: cx + off - sz / 2, y: cy - off - sz / 2, w: sz, h: sz });
+    tryPush({ x: cx - off - sz / 2, y: cy + off - sz / 2, w: sz, h: sz });
+    tryPush({ x: cx + off - sz / 2, y: cy + off - sz / 2, w: sz, h: sz });
+    tryPush({ x: cx - sz / 2, y: cy - sz / 2, w: sz, h: sz });
+    return out;
+  }
+
+  if (kind === 'broken_walls') {
+    const segW = Math.max(18, Math.floor(iw * 0.22));
+    const segH = 8;
+    const cx = Math.floor((ix0 + ix1) / 2);
+    const cy = Math.floor((iy0 + iy1) / 2);
+    tryPush({ x: ix0 + 10, y: cy - 12, w: segW, h: segH });
+    tryPush({ x: ix1 - 10 - segW, y: cy + 4, w: segW, h: segH });
+    tryPush({ x: cx - segW / 2, y: iy0 + 16, w: segW, h: segH });
+    return out;
+  }
+
+  if (kind === 'alcove_pairs') {
+    const bw = 12;
+    const bh = 12;
+    tryPush({ x: ix0 + 14, y: iy0 + 14, w: bw, h: bh });
+    tryPush({ x: ix1 - 14 - bw, y: iy0 + 14, w: bw, h: bh });
+    tryPush({ x: ix0 + 14, y: iy1 - 14 - bh, w: bw, h: bh });
+    tryPush({ x: ix1 - 14 - bw, y: iy1 - 14 - bh, w: bw, h: bh });
+    return out;
+  }
+
   return out;
 }
 
@@ -525,7 +651,9 @@ export function generateProceduralContent(bp: RoomBlueprint, runSeed: number): {
       Math.imul(hashDoorDirs(bp.doors), 0x85ebca6b) ^
       (bp.isBossRoom ? 0xbeef : 0)) |
     0;
-  const { width: rw, height: rh } = pickDimensions(seed, !!bp.isBossRoom);
+  const hasMajorBoss = bp.enemies.some((e) => BOSS_ARENA_ENEMIES.has(e));
+  const isBossArena = !!bp.isBossRoom || hasMajorBoss;
+  const { width: rw, height: rh } = pickDimensions(seed, isBossArena);
   const wt = ROOM.WALL_THICKNESS;
   const tw = Math.round(rw / TILE);
   const th = Math.round(rh / TILE);
@@ -535,12 +663,26 @@ export function generateProceduralContent(bp: RoomBlueprint, runSeed: number): {
   const rng = mulberry32(seed ^ 0x2f6d);
 
   let shape: RoomShape = 'rectangle';
-  if (bp.theme === 'flooded') {
+  if (isBossArena) {
+    shape = 'rectangle';
+  } else if (bp.theme === 'flooded') {
     shape = seed % 2 === 0 ? 'canals' : 'bump-south';
   } else if (bp.theme === 'toxicworks') {
     shape = seed % 2 === 0 ? 'pump-lanes' : 't-north';
-  } else if (!bp.isBossRoom) {
+  } else {
     shape = SHAPES[(seed >>> 0) % SHAPES.length];
+    // Multi-door rooms prefer connective/corridor-rich archetypes.
+    if (bp.doors.length >= 3) {
+      const multiDoorShapes: RoomShape[] = [
+        'plus',
+        'ring-lane',
+        'double-chamber-h',
+        'double-chamber-v',
+        'snake-h',
+        'snake-v',
+      ];
+      shape = multiDoorShapes[(seed >>> 3) % multiDoorShapes.length]!;
+    }
   }
 
   stampShape(walk, tw, th, mt, shape, rng);
@@ -551,14 +693,18 @@ export function generateProceduralContent(bp: RoomBlueprint, runSeed: number): {
   }
 
   let furnish: FurnishKind = FURNISH[seed % FURNISH.length];
-  if (bp.theme === 'flooded') {
+  if (isBossArena) {
+    // Keep boss arenas open and readable.
+    furnish = 'empty';
+  } else if (bp.theme === 'flooded') {
     furnish = seed % 2 === 0 ? 'spill_channels' : 'center_cistern';
   } else if (bp.theme === 'toxicworks') {
     furnish = seed % 2 === 0 ? 'pump_cross' : 'side_benches';
-  } else if (bp.isBossRoom) {
-    furnish = seed % 2 === 0 ? 'pillars_row' : 'empty';
+  } else if (bp.doors.length >= 3) {
+    const rich: FurnishKind[] = ['pillar_cluster', 'broken_walls', 'alcove_pairs', 'barrel_pairs'];
+    furnish = rich[(seed >>> 5) % rich.length]!;
   }
-  const props = placeStructuredProps(seed + 3, walk, rw, rh, wt, bp.doors, furnish, !!bp.isBossRoom);
+  const props = placeStructuredProps(seed + 3, walk, rw, rh, wt, bp.doors, furnish, isBossArena);
 
   const wallRects = walkableGridToWallRects(walk, TILE);
   const allObs = [...wallRects, ...props];

@@ -3,6 +3,9 @@
 import { useId } from 'react'
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
+/** Menu / HUD body copy — system monospace (not the title pixel face). */
+export const MENU_FONT_STACK = 'ui-monospace, "Cascadia Code", Consolas, monospace'
+
 /** Matches in-game cellar / deep / rust tones. */
 export const MENU = {
   void: '#050302',
@@ -165,7 +168,7 @@ export function MenuBtn({
       className={`rounded-none uppercase tracking-[0.2em] text-[11px] font-bold transition-[transform,filter,box-shadow] duration-100 hover:brightness-110 active:translate-y-0.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:translate-y-0 ${className}`}
       style={{
         color: v.text,
-        fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", monospace',
+        fontFamily: MENU_FONT_STACK,
         background: `linear-gradient(180deg, ${v.from} 0%, ${v.to} 100%)`,
         border: `2px solid ${v.border}`,
         boxShadow: `

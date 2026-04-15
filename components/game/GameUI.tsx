@@ -4,6 +4,8 @@ import { RunRadar } from './RunRadar';
 import type { MinimapLayout } from '@/lib/game/rooms/roomData';
 import { PLAYER, type RoomThemeId } from '@/lib/game/utils/constants';
 
+const HUD_FONT_STACK = 'ui-monospace, "Cascadia Mono", Consolas, monospace';
+
 interface GameUIProps {
   health: number;
   maxHealth: number;
@@ -55,8 +57,9 @@ export function GameUI({
         >
           <PixelDashBar fraction={dashFrac} chapter={chapter} />
           <div
-            className="select-none font-mono text-[8px] uppercase leading-none tracking-[0.18em]"
+            className="select-none text-[9px] uppercase leading-none tracking-[0.14em]"
             style={{
+              fontFamily: HUD_FONT_STACK,
               color: chapter === 2 ? '#5ec0c8' : '#7a98a8',
               textShadow:
                 '1px 0 0 #080606, -1px 0 0 #080606, 0 1px 0 #080606, 0 -1px 0 #080606',
@@ -76,8 +79,13 @@ export function GameUI({
           enteredRooms={enteredRooms}
         />
         <div
-          className="text-[10px] font-mono tracking-widest text-right"
-          style={{ color: 'rgba(140, 128, 118, 0.75)' }}
+          className="text-[11px] tracking-[0.16em] text-right leading-tight"
+          style={{
+            fontFamily: HUD_FONT_STACK,
+            color: 'rgba(140, 128, 118, 0.82)',
+            textShadow:
+              '1px 0 0 rgba(8,6,6,0.9), -1px 0 0 rgba(8,6,6,0.9), 0 1px 0 rgba(8,6,6,0.9), 0 -1px 0 rgba(8,6,6,0.9)',
+          }}
         >
           <div style={{ color: chapter === 2 ? 'rgba(130, 210, 230, 0.85)' : undefined }}>
             CHAPTER {chapter === 1 ? 'I' : 'II'}
@@ -95,8 +103,9 @@ export function GameUI({
             backgroundColor: 'rgba(8, 6, 10, 0.82)',
             borderColor: 'rgba(50, 36, 40, 0.6)',
             color: '#9a9088',
-            fontFamily: 'monospace',
-            fontSize: '12px',
+            fontFamily: HUD_FONT_STACK,
+            fontSize: '11px',
+            lineHeight: 1.45,
             boxShadow: '0 0 24px rgba(0,0,0,0.5)',
           }}
         >
