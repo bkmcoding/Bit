@@ -26,13 +26,13 @@ const CROSS_MS = 1900
 /** Full-screen static only, then auto-fade into menu (never blocked on audio resume). */
 const BOOT_STATIC_MS = 3200
 const BOOT_TAIL_MS = 350
-/** Veil + static grain ease; longer reads smoother on screen. */
-/** Longer tail so static does not “snap” off; curve eases out gently. */
-const INTRO_FADE_MS = 3800
-/** Ease for intro veil → menu — slow start/end, no hard cutoff. */
-const INTRO_FADE_EASE = 'cubic-bezier(0.2, 0.05, 0.12, 1)'
-/** Audio crossfade: static tails out while menu theme rises (can run longer than the veil). */
-const AUDIO_STATIC_FADE_OUT_MS = 3600
+/** Static grain fades out first; then menu + veil fade in (sequential, no blend fight). */
+const STATIC_FADE_OUT_MS = 2200
+/** Menu UI + dark veil fade-in after static has cleared. */
+const MENU_CONTENT_FADE_MS = 1650
+const INTRO_FADE_EASE = 'cubic-bezier(0.22, 0.06, 0.18, 1)'
+/** Audio: TV static ducks over the same window as visual static fade. */
+const AUDIO_STATIC_FADE_OUT_MS = STATIC_FADE_OUT_MS
 const AUDIO_MENU_FADE_IN_MS = 3200
 /** Menu music starts after static has begun fading — overlap without a hard seam. */
 const AUDIO_MENU_FADE_DELAY_MS = 380
@@ -104,6 +104,8 @@ export function MainMenu({ onStart }: MainMenuProps) {
   const [awaitingStandby, setAwaitingStandby] = useState(true)
   const [introOpaque, setIntroOpaque] = useState(true)
   const [introLayerMounted, setIntroLayerMounted] = useState(true)
+  /** 0 until static has fully faded; then animates to 1 for menu copy (no overlap with harsh static). */
+  const [menuContentOpacity, setMenuContentOpacity] = useState(0)
   const [isVisible, setIsVisible] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [isStarting, setIsStarting] = useState(false)
@@ -192,16 +194,35 @@ export function MainMenu({ onStart }: MainMenuProps) {
       await AudioManager.playMusic('MUSIC_MENU')
       await AudioManager.resume().catch(() => undefined)
 
-      await sleep(BOOT_TAIL_MS)
-      if (cancelled) return
-
-      setIntroOpaque(false)
-      setIsVisible(true)
       AudioManager.crossfadeMenuStaticToMusic({
         staticFadeOutMs: AUDIO_STATIC_FADE_OUT_MS,
         musicFadeInMs: AUDIO_MENU_FADE_IN_MS,
         musicDelayMs: AUDIO_MENU_FADE_DELAY_MS,
       })
+
+      await new Promise<void>((resolve) => {
+        const t0 = performance.now()
+        const step = (now: number) => {
+          if (cancelled) return
+          const u = Math.min(1, (now - t0) / STATIC_FADE_OUT_MS)
+          staticBleedRef.current = 1 - easeInOutQuint(u)
+          if (u < 1) {
+            requestAnimationFrame(step)
+          } else {
+            staticBleedRef.current = 0
+            resolve()
+          }
+        }
+        requestAnimationFrame(step)
+      })
+      if (cancelled) return
+
+      await sleep(BOOT_TAIL_MS)
+      if (cancelled) return
+
+      setIntroOpaque(false)
+      setMenuContentOpacity(1)
+      setIsVisible(true)
       justPoweredOnRef.current = false
     }
 
@@ -222,25 +243,6 @@ export function MainMenu({ onStart }: MainMenuProps) {
   useEffect(() => {
     if (awaitingStandby) staticBleedRef.current = 0
   }, [awaitingStandby])
-
-  useEffect(() => {
-    if (awaitingStandby) return
-    if (introOpaque) return
-
-    const start = performance.now()
-    let frame: number
-    const step = (now: number) => {
-      const t = Math.min(1, (now - start) / INTRO_FADE_MS)
-      staticBleedRef.current = 1 - easeInOutQuint(t)
-      if (t < 1) {
-        frame = requestAnimationFrame(step)
-      } else {
-        staticBleedRef.current = 0
-      }
-    }
-    frame = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(frame)
-  }, [introOpaque, awaitingStandby])
 
   const goToSetup = async () => {
     await AudioManager.resume()
@@ -396,7 +398,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
           className="absolute inset-0 z-40 pointer-events-none transition-opacity"
           style={{
             opacity: introOpaque ? 1 : 0,
-            transitionDuration: `${INTRO_FADE_MS}ms`,
+            transitionDuration: `${MENU_CONTENT_FADE_MS}ms`,
             transitionTimingFunction: INTRO_FADE_EASE,
             background: 'rgba(2, 1, 1, 0.92)',
           }}
@@ -410,7 +412,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
           menuRevealed ? 'pointer-events-auto opacity-100 translate-y-0' : 'pointer-events-none opacity-0'
         }`}
         style={{
-          transitionDuration: `${Math.min(800, INTRO_FADE_MS)}ms`,
+          transitionDuration: `${Math.min(800, MENU_CONTENT_FADE_MS)}ms`,
           transitionDelay: menuRevealed ? '200ms' : '0ms',
           background: `linear-gradient(180deg, ${MENU.panelHi} 0%, ${MENU.panel} 100%)`,
           border: `2px solid ${MENU.rim}`,
@@ -430,8 +432,8 @@ export function MainMenu({ onStart }: MainMenuProps) {
           phase === 'title' ? 'flex flex-col items-center justify-center' : 'flex flex-col'
         }`}
         style={{
-          opacity: introOpaque ? 0 : 1,
-          transition: `opacity ${INTRO_FADE_MS}ms ${INTRO_FADE_EASE}`,
+          opacity: awaitingStandby ? 0 : menuContentOpacity,
+          transition: `opacity ${MENU_CONTENT_FADE_MS}ms ${INTRO_FADE_EASE}`,
           pointerEvents: introOpaque ? 'none' : 'auto',
         }}
       >

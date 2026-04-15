@@ -97,7 +97,8 @@ export interface AudioSettings {
 
 const DEFAULT_SETTINGS: AudioSettings = {
   masterVolume: 0.7,
-  musicVolume: 0.5,
+  /** Gameplay/boss tracks sit quieter than SFX at equal meters; nudge default up. */
+  musicVolume: 0.74,
   /** Slightly higher default so horror SFX (often synth) sit closer to music. */
   sfxVolume: 0.88,
   muted: false,
@@ -136,6 +137,9 @@ class AudioManagerClass {
   private ambienceCave: AmbienceLayer | null = null;
   /** Low rumble when no `cave` MP3 is present (distinct from white noise). */
   private ambienceCaveOsc: { gain: GainNode; oscillators: OscillatorNode[] } | null = null;
+  private rainPitterIntervalId: number | null = null;
+  private rainWindow: { source: AudioBufferSourceNode; gain: GainNode } | null = null;
+  private omenTimerId: number | null = null;
   private skitterCooldownUntil: number = 0;
   /** Serializes track switches so concurrent playMusic (e.g. menu unlock + start game) cannot overlap. */
   private musicSwitchQueue: Promise<void> = Promise.resolve();
@@ -1362,7 +1366,7 @@ class AudioManagerClass {
     const g = this.audioContext.createGain();
     src.buffer = buf;
     src.loop = true;
-    const targetVol = 0.035 * this.settings.masterVolume;
+    const targetVol = 0.018 * this.settings.masterVolume;
     const t = this.audioContext.currentTime;
     const fadeSec = Math.max(0.05, fadeInMs / 1000);
     g.gain.setValueAtTime(0, t);
@@ -1430,13 +1434,13 @@ class AudioManagerClass {
 
   private updateMenuTvBuzzGainNode(gainNode: GainNode): void {
     if (!this.audioContext) return;
-    const v = this.settings.muted ? 0 : 0.012 * this.settings.masterVolume;
+    const v = this.settings.muted ? 0 : 0.0065 * this.settings.masterVolume;
     gainNode.gain.setValueAtTime(v, this.audioContext.currentTime);
   }
 
   private refreshMenuTvBuzzVolume(): void {
     if (!this.menuTvBuzz?.gain || !this.audioContext) return;
-    const v = this.settings.muted ? 0 : 0.012 * this.settings.masterVolume;
+    const v = this.settings.muted ? 0 : 0.0065 * this.settings.masterVolume;
     this.menuTvBuzz.gain.gain.setValueAtTime(v, this.audioContext.currentTime);
   }
 
@@ -1961,11 +1965,235 @@ class AudioManagerClass {
   private syncHorrorWithTrack(track: MusicTrack): void {
     if (track === 'MUSIC_MENU') {
       this.stopHorrorAmbience();
+      this.stopRainPitter();
+      this.stopRainWindow();
+      this.stopOminousRandoms();
     } else if (track === 'MUSIC_GAME' || track === 'MUSIC_WATER') {
       this.startHorrorAmbience(false);
+      this.startRainWindow();
+      this.startRainPitter();
+      this.startOminousRandoms();
     } else if (track === 'MUSIC_BOSS') {
       this.startHorrorAmbience(true);
+      this.stopRainPitter();
+      this.stopRainWindow();
+      this.stopOminousRandoms();
     }
+  }
+
+  private startRainWindow(): void {
+    if (this.rainWindow) return;
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+    const ctx = this.audioContext;
+
+    const dur = 2.4;
+    const n = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    let lp = 0;
+    for (let i = 0; i < n; i++) {
+      // Slightly smoothed noise (less "static", more "sheet").
+      const x = (Math.random() * 2 - 1) * 0.55;
+      lp = lp * 0.92 + x * 0.08;
+      // Gentle amplitude flutter.
+      const t = i / ctx.sampleRate;
+      const flutter = 0.82 + 0.18 * Math.sin(t * 2.1) + 0.1 * Math.sin(t * 5.7);
+      ch[i] = lp * flutter;
+    }
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const g = ctx.createGain();
+    const now = ctx.currentTime;
+    const v = 0.016 * this.settings.masterVolume * this.settings.musicVolume;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(v, now + 1.2);
+
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.setValueAtTime(1200, now);
+    hp.Q.setValueAtTime(0.7, now);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(2600, now);
+    bp.Q.setValueAtTime(0.8, now);
+    const lpF = ctx.createBiquadFilter();
+    lpF.type = 'lowpass';
+    lpF.frequency.setValueAtTime(7200, now);
+    lpF.Q.setValueAtTime(0.7, now);
+
+    src.connect(g);
+    g.connect(hp);
+    hp.connect(bp);
+    bp.connect(lpF);
+    lpF.connect(ctx.destination);
+    src.start(0);
+    this.rainWindow = { source: src, gain: g };
+  }
+
+  private stopRainWindow(): void {
+    if (!this.rainWindow) return;
+    try {
+      this.rainWindow.source.stop();
+    } catch {
+      // ignore
+    }
+    try {
+      this.rainWindow.gain.disconnect();
+    } catch {
+      // ignore
+    }
+    this.rainWindow = null;
+  }
+
+  private startOminousRandoms(): void {
+    if (this.omenTimerId !== null) return;
+    if (typeof window === 'undefined') return;
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+
+    const scheduleNext = () => {
+      // 22–70s, slightly biased long.
+      const u = Math.random();
+      const sec = 22 + (1 - u * u) * 48;
+      this.omenTimerId = window.setTimeout(() => {
+        this.omenTimerId = null;
+        this.playOminousOneShot();
+        scheduleNext();
+      }, sec * 1000);
+    };
+    scheduleNext();
+  }
+
+  private stopOminousRandoms(): void {
+    if (this.omenTimerId === null) return;
+    window.clearTimeout(this.omenTimerId);
+    this.omenTimerId = null;
+  }
+
+  private playOminousOneShot(): void {
+    if (!this.audioContext || this.settings.muted) return;
+    // Only during runs.
+    if (this.currentMusicTrack !== 'MUSIC_GAME' && this.currentMusicTrack !== 'MUSIC_WATER') return;
+    this.ensureAudioContextRunning();
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const base = 0.11 * this.settings.masterVolume * this.settings.musicVolume;
+    if (base <= 0) return;
+
+    const pick = Math.random();
+    if (pick < 0.45) {
+      // Distant moan (subtle).
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(48 + Math.random() * 10, now);
+      o.frequency.exponentialRampToValueAtTime(34 + Math.random() * 6, now + 1.6);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.linearRampToValueAtTime(base * 0.14, now + 0.6);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 2.2);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(320, now);
+      o.connect(g);
+      g.connect(lp);
+      lp.connect(ctx.destination);
+      o.start(now);
+      o.stop(now + 2.3);
+    } else if (pick < 0.78) {
+      // Scrape/creak.
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(120 + Math.random() * 30, now);
+      o.frequency.exponentialRampToValueAtTime(60 + Math.random() * 20, now + 0.7);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.linearRampToValueAtTime(base * 0.1, now + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.85);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(520 + Math.random() * 220, now);
+      bp.Q.setValueAtTime(1.8, now);
+      o.connect(g);
+      g.connect(bp);
+      bp.connect(ctx.destination);
+      o.start(now);
+      o.stop(now + 0.9);
+    } else {
+      // Whispery breath (noise).
+      const len = Math.floor(ctx.sampleRate * 0.6);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const t = i / len;
+        const env = Math.sin(Math.PI * t) * Math.exp(-0.9 * t);
+        ch[i] = (Math.random() * 2 - 1) * env;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.linearRampToValueAtTime(base * 0.06, now + 0.06);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.75);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(1400 + Math.random() * 500, now);
+      bp.Q.setValueAtTime(2.2, now);
+      src.connect(g);
+      g.connect(bp);
+      bp.connect(ctx.destination);
+      src.start(now);
+      src.stop(now + 0.8);
+    }
+  }
+
+  private startRainPitter(): void {
+    if (this.rainPitterIntervalId !== null) return;
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+    const ctx = this.audioContext;
+
+    const tick = () => {
+      if (!this.audioContext || this.settings.muted) return;
+      if (this.currentMusicTrack !== 'MUSIC_GAME' && this.currentMusicTrack !== 'MUSIC_WATER') return;
+      // Light window taps over the rain bed.
+      if (Math.random() > 0.62) return;
+
+      const now = ctx.currentTime;
+      const v = 0.018 * this.settings.masterVolume * this.settings.musicVolume;
+      if (v <= 0) return;
+
+      const len = Math.floor(ctx.sampleRate * 0.022);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const t = i / len;
+        const env = Math.exp(-14 * t);
+        ch[i] = (Math.random() * 2 - 1) * env;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.linearRampToValueAtTime(v * (0.7 + Math.random() * 0.6), now + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.03);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(3600 + Math.random() * 2600, now);
+      bp.Q.setValueAtTime(9 + Math.random() * 4, now);
+      src.connect(g);
+      g.connect(bp);
+      bp.connect(ctx.destination);
+      src.start(now);
+      src.stop(now + 0.035);
+    };
+
+    this.rainPitterIntervalId = window.setInterval(tick, 110);
+  }
+
+  private stopRainPitter(): void {
+    if (this.rainPitterIntervalId === null) return;
+    window.clearInterval(this.rainPitterIntervalId);
+    this.rainPitterIntervalId = null;
   }
 
   private stopCaveOscillatorBed(): void {
@@ -1992,6 +2220,9 @@ class AudioManagerClass {
     this.ambienceWhite = null;
     this.ambienceCave = null;
     this.stopCaveOscillatorBed();
+    this.stopRainPitter();
+    this.stopRainWindow();
+    this.stopOminousRandoms();
   }
 
   private updateAmbienceLoopGains(): void {
@@ -2448,6 +2679,65 @@ class AudioManagerClass {
       default:
         break;
     }
+  }
+
+  /** Short 8-bit terminal tick for sector-0 story captions. */
+  playSector0IntroTextBlip(): void {
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+    this.ensureAudioContextRunning();
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = this.bossIntroSfxVol(0.55);
+    if (v <= 0) return;
+
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(165 + Math.random() * 48, now);
+    o.frequency.exponentialRampToValueAtTime(82, now + 0.038);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(v * 0.95, now + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.055);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1800, now);
+    lp.frequency.exponentialRampToValueAtTime(520, now + 0.045);
+    o.connect(g);
+    g.connect(lp);
+    lp.connect(ctx.destination);
+    o.start(now);
+    o.stop(now + 0.07);
+  }
+
+  /** Tiny scared whimper loop for sector-0 opener (synth). */
+  playSector0IntroScaredWhimper(): void {
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+    this.ensureAudioContextRunning();
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = this.bossIntroSfxVol(0.62);
+    if (v <= 0) return;
+
+    const f0 = 240 + Math.random() * 50;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(f0, now);
+    o.frequency.exponentialRampToValueAtTime(155, now + 0.05);
+    o.frequency.linearRampToValueAtTime(168, now + 0.12);
+    o.frequency.exponentialRampToValueAtTime(110, now + 0.24);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(v * 0.72, now + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(380, now);
+    bp.Q.setValueAtTime(1.2, now);
+    o.connect(g);
+    g.connect(bp);
+    bp.connect(ctx.destination);
+    o.start(now);
+    o.stop(now + 0.32);
   }
 
   // Volume controls

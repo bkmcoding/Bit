@@ -44,6 +44,8 @@ export function GameCanvas() {
   const [isVictory, setIsVictory] = useState(false);
   /** Fullscreen black cover opacity (0–1) for menu → gameplay. */
   const [menuToGameCover, setMenuToGameCover] = useState(0);
+  /** Sector 0 opening cutscene hides the HUD until the story finishes. */
+  const [sector0IntroActive, setSector0IntroActive] = useState(false);
 
   const [devHud, setDevHud] = useState<DevPanelPayload>({
     unlocked: false,
@@ -103,6 +105,7 @@ export function GameCanvas() {
       onGameOver: (victory) => setIsVictory(victory),
       onDevPanelChange: setDevHud,
       onPresentFrame: presenter ? (src, u) => presenter.present(src, u) : undefined,
+      onSector0Intro: setSector0IntroActive,
     });
 
     game.attach(presenter ? glCanvas : buffer);
@@ -222,7 +225,7 @@ export function GameCanvas() {
         />
 
         {/* UI Overlay */}
-        {gameState === 'PLAYING' && (
+        {gameState === 'PLAYING' && !sector0IntroActive && (
           <GameUI
             health={health.current}
             maxHealth={health.max}

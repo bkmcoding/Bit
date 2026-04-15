@@ -64,6 +64,9 @@ export class Player extends Entity {
   private legOffset: number = 0;
   private legDirection: number = 1;
   private facingAngle: number = 0;
+  private introLookX: number = 0;
+  private introLookY: number = 0;
+  private introLookTimer: number = 0;
 
   constructor(position: Vector2, game: Game) {
     super({
@@ -101,7 +104,7 @@ export class Player extends Entity {
       );
     }
 
-    if (this.game.isBossIntroPlaying()) {
+    if (this.game.isCinematicIntroPlaying()) {
       this.dashBurstRemaining = 0;
       this.velocity.x = 0;
       this.velocity.y = 0;
@@ -303,58 +306,151 @@ export class Player extends Entity {
     this.game.setState('GAME_OVER');
   }
 
-  render(ctx: CanvasRenderingContext2D): void {
+  render(
+    ctx: CanvasRenderingContext2D,
+    opts?: {
+      crying?: boolean;
+      facingAngleOverride?: number;
+      /** Sector-0 intro clock — same Bit sprite, scared look-around, shiver, dripping tears. */
+      sector0IntroT?: number;
+    }
+  ): void {
     const x = Math.round(this.position.x);
     const y = Math.round(this.position.y);
-    
+    const introT = opts?.sector0IntroT;
+    const inSector0Cutscene = introT !== undefined;
+
+    let faceAngle = opts?.facingAngleOverride ?? this.facingAngle;
+    if (inSector0Cutscene) {
+      // Paranoid eye darts: snap left/right and linger (no rolling/rotation).
+      const dt = 1 / 60;
+      this.introLookTimer = Math.max(0, this.introLookTimer - dt);
+      if (this.introLookTimer <= 0) {
+        const st = introT;
+        // Deterministic-ish pseudo randomness; avoids frame-to-frame jitter.
+        const r = (Math.sin(st * 4.1) + Math.sin(st * 2.3 + 1.1) + 2) / 4;
+        const pick = r < 0.46 ? -1 : r > 0.54 ? 1 : 0;
+        this.introLookX = pick;
+        this.introLookY = -0.18; // slight upward tension
+        this.introLookTimer = 0.22 + ((Math.sin(st * 6.0 + 0.2) + 1) * 0.5) * 0.34;
+      }
+      // Keep faceAngle stable; we will override eye offsets below.
+    }
+
     const spawnBlink = this.spawnProtectionTime > 0 && Math.floor(this.spawnProtectionTime * 12) % 2 === 0;
     const hurtBlink = this.isInvulnerable && Math.floor(this.invulnerableTime * 10) % 2 === 0;
     if (spawnBlink || hurtBlink) {
       ctx.globalAlpha = 0.5;
     }
-    
+
     ctx.save();
     ctx.translate(x, y);
-    
-    // Body (white circle)
+
+    if (inSector0Cutscene) {
+      const st = introT;
+      ctx.translate(
+        Math.sin(st * 18) * 0.16 + Math.sin(st * 29) * 0.07,
+        Math.sin(st * 22) * 0.11
+      );
+    } else if (opts?.crying) {
+      ctx.translate(Math.sin(performance.now() * 0.018) * 0.35, 0);
+    }
+
+    const legOffset =
+      this.legOffset +
+      (inSector0Cutscene && introT !== undefined ? Math.sin(introT * 17) * 0.35 : 0);
+
+    // Base Bit sprite (unchanged proportions/colors).
     ctx.fillStyle = this.isInvulnerable ? COLORS.PLAYER_HURT : COLORS.PLAYER_BODY;
     ctx.beginPath();
     ctx.arc(0, 0, 3, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Outline
+
     ctx.strokeStyle = COLORS.PLAYER_OUTLINE;
     ctx.lineWidth = 1;
     ctx.stroke();
-    
-    // Legs
+
     ctx.strokeStyle = COLORS.PLAYER_OUTLINE;
     ctx.lineWidth = 1;
-    
-    // Left leg
     ctx.beginPath();
     ctx.moveTo(-1, 2);
-    ctx.lineTo(-2 + this.legOffset * 0.5, 5);
+    ctx.lineTo(-2 + legOffset * 0.5, 5);
     ctx.stroke();
-    
-    // Right leg
     ctx.beginPath();
     ctx.moveTo(1, 2);
-    ctx.lineTo(2 - this.legOffset * 0.5, 5);
+    ctx.lineTo(2 - legOffset * 0.5, 5);
     ctx.stroke();
-    
-    // Eyes (looking at mouse direction)
-    const eyeOffsetX = Math.cos(this.facingAngle) * 1;
-    const eyeOffsetY = Math.sin(this.facingAngle) * 1;
-    
+
+    const eyeOffsetX = inSector0Cutscene ? this.introLookX : Math.cos(faceAngle) * 1;
+    const eyeOffsetY = inSector0Cutscene ? this.introLookY : Math.sin(faceAngle) * 1;
+    const leftEyeX = -1 + eyeOffsetX * 0.5;
+    const leftEyeY = -1 + eyeOffsetY * 0.5;
+    const rightEyeX = 1 + eyeOffsetX * 0.5;
+    const rightEyeY = -1 + eyeOffsetY * 0.5;
+
     ctx.fillStyle = COLORS.PLAYER_OUTLINE;
     ctx.beginPath();
-    ctx.arc(-1 + eyeOffsetX * 0.5, -1 + eyeOffsetY * 0.5, 0.5, 0, Math.PI * 2);
-    ctx.arc(1 + eyeOffsetX * 0.5, -1 + eyeOffsetY * 0.5, 0.5, 0, Math.PI * 2);
+    ctx.arc(leftEyeX, leftEyeY, 0.5, 0, Math.PI * 2);
+    ctx.arc(rightEyeX, rightEyeY, 0.5, 0, Math.PI * 2);
     ctx.fill();
-    
+
+    if (opts?.crying) {
+      this.renderBitTears(
+        ctx,
+        leftEyeX - 0.25,
+        leftEyeY + 0.55,
+        rightEyeX + 0.25,
+        rightEyeY + 0.55,
+        inSector0Cutscene,
+        introT ?? 0
+      );
+    }
+
     ctx.restore();
     ctx.globalAlpha = 1;
+  }
+
+  /** Falling/dripping tear pixels (sector-0); legacy two-block fallback otherwise. */
+  private renderBitTears(
+    ctx: CanvasRenderingContext2D,
+    lx0: number,
+    ly0: number,
+    lx1: number,
+    ly1: number,
+    detailed: boolean,
+    introT: number
+  ): void {
+    if (!detailed) {
+      ctx.fillStyle = 'rgba(120, 190, 255, 0.92)';
+      ctx.fillRect(-2, 2, 1, 2);
+      ctx.fillRect(1, 2, 1, 2);
+      return;
+    }
+
+    const dripFromEye = (ductX: number, ductY: number, seed: number) => {
+      const x = Math.round(ductX);
+      // Small wet source at the eye corner.
+      ctx.fillStyle = 'rgba(190, 235, 255, 0.5)';
+      ctx.fillRect(x, Math.round(ductY), 1, 1);
+
+      // Three staggered droplets so it reads as active dripping.
+      for (let d = 0; d < 3; d++) {
+        const period = 0.74 + d * 0.12;
+        const phase = ((introT + seed + d * 0.31) / period) % 1;
+        const y = ductY + 0.55 + phase * (3.2 + d * 0.9);
+        const alpha = 0.78 - d * 0.16;
+        ctx.fillStyle = `rgba(155, 215, 255, ${alpha})`;
+        ctx.fillRect(x, Math.round(y), 1, 1);
+        if (d === 0) {
+          ctx.fillStyle = 'rgba(130, 195, 245, 0.48)';
+          ctx.fillRect(x, Math.round(y) - 1, 1, 1);
+        }
+      }
+    };
+
+    dripFromEye(lx0 - 0.35, ly0 + 0.35, 0);
+    dripFromEye(lx1 + 0.35, ly1 + 0.35, 1.85);
+
   }
 
   // Reset position for room transition
