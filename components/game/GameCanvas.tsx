@@ -19,6 +19,7 @@ import { ChapterMapScreen } from './ChapterMapScreen';
 const MENU_TO_GAME_COVER_MS = 620;
 const MENU_AUDIO_LEAVE_MS = 880;
 const GAMEPLAY_MUSIC_FADE_IN_MS = 2000;
+const VIEWPORT_MARGIN_PX = 16;
 
 const EMPTY_MINIMAP: MinimapLayout = { positions: [], edges: [] };
 
@@ -29,7 +30,6 @@ export function GameCanvas() {
   const [displayMode, setDisplayMode] = useState<'webgl' | 'canvas2d'>('canvas2d');
   
   const [gameState, setGameState] = useState<GameState>('MENU');
-  const [fitScale, setFitScale] = useState(1);
   const [health, setHealth] = useState({ current: 3, max: 3 });
   const [hud, setHud] = useState<RoomHudPayload>({
     current: 0,
@@ -162,25 +162,6 @@ export function GameCanvas() {
     gameRef.current?.continueToChapter2(path);
   }, []);
 
-  useEffect(() => {
-    const update = () => {
-      // Keep the full game frame visible (incl. HUD) on any viewport.
-      // A small margin prevents edge-clipping on mobile browser UI.
-      const margin = 16;
-      const vw = Math.max(0, window.innerWidth - margin);
-      const vh = Math.max(0, window.innerHeight - margin);
-      const s = Math.min(vw / GAME.DISPLAY_WIDTH, vh / GAME.DISPLAY_HEIGHT, 1);
-      setFitScale(Number.isFinite(s) && s > 0 ? s : 1);
-    };
-    update();
-    window.addEventListener('resize', update, { passive: true });
-    window.addEventListener('orientationchange', update);
-    return () => {
-      window.removeEventListener('resize', update);
-      window.removeEventListener('orientationchange', update);
-    };
-  }, []);
-
   return (
     <div className="relative w-full h-full flex items-center justify-center bg-black">
       <div 
@@ -188,7 +169,8 @@ export function GameCanvas() {
         style={{ 
           width: GAME.DISPLAY_WIDTH, 
           height: GAME.DISPLAY_HEIGHT,
-          transform: `scale(${fitScale})`,
+          // CSS viewport-fit scale avoids first-paint jump from JS resize effects.
+          transform: `scale(min(1, calc((100vw - ${VIEWPORT_MARGIN_PX}px) / ${GAME.DISPLAY_WIDTH}), calc((100vh - ${VIEWPORT_MARGIN_PX}px) / ${GAME.DISPLAY_HEIGHT})))`,
           transformOrigin: 'center',
         }}
       >
