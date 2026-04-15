@@ -1,6 +1,14 @@
 import type { Game } from '../engine/Game';
 import { Room } from '../rooms/Room';
-import { buildRunRooms, ROOM_COUNT, type MinimapLayout } from '../rooms/roomData';
+import {
+  buildRunRooms,
+  ROOM_COUNT,
+  type MinimapLayout,
+} from '../rooms/roomData';
+import {
+  CHAPTER_1_LAST_ROOM_INDEX,
+  CHAPTER_2_FIRST_ROOM_INDEX,
+} from '../rooms/chapterConfig';
 import { Spider } from '../entities/enemies/Spider';
 import { Spitter } from '../entities/enemies/Spitter';
 import { Dasher } from '../entities/enemies/Dasher';
@@ -9,6 +17,12 @@ import { Broodmother } from '../entities/enemies/Broodmother';
 import { Brute } from '../entities/enemies/Brute';
 import { Skitter } from '../entities/enemies/Skitter';
 import { Widow } from '../entities/enemies/Widow';
+import { ToxicSpitter } from '../entities/enemies/ToxicSpitter';
+import { TideCrawler } from '../entities/enemies/TideCrawler';
+import { GillStalker } from '../entities/enemies/GillStalker';
+import { MurkLeech } from '../entities/enemies/MurkLeech';
+import { BrineScuttler } from '../entities/enemies/BrineScuttler';
+import { TrenchMatriarch } from '../entities/enemies/TrenchMatriarch';
 import {
   DIFFICULTY_SETTINGS,
   SPAWN_PROTECTION_MIN_SEC,
@@ -146,34 +160,34 @@ export class RoomManager {
     p.y = Math.max(wt + half, Math.min(h - wt - half, p.y));
   }
 
-  /** Prefer a spot far from enemies, inside the room, and not inside crates/pillars. */
+  /** Stay near the entry door, stepping inward only as needed for clearance. */
   private findBestPlayerSpawnPosition(room: Room, doorSpawn: Vector2): Vector2 {
-    const w = room.width;
-    const h = room.height;
     const safe = room.getSafeRoomCenter();
     const cx = safe.x;
     const cy = safe.y;
     const obs = room.getObstacleRects();
     const ph = this.game.player.size / 2;
 
+    let dx = cx - doorSpawn.x;
+    let dy = cy - doorSpawn.y;
+    if (dx * dx + dy * dy < 4) {
+      dx = 0;
+      dy = 1;
+    }
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+
     const candidates: Vector2[] = [];
     candidates.push(doorSpawn.clone());
-    for (let t = 0.12; t <= 1; t += 0.11) {
-      candidates.push(
-        new Vector2(
-          doorSpawn.x + (cx - doorSpawn.x) * t,
-          doorSpawn.y + (cy - doorSpawn.y) * t
-        )
-      );
-    }
-    for (let r = 24; r <= 78; r += 10) {
-      for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
-        candidates.push(new Vector2(cx + Math.cos(a) * r, cy + Math.sin(a) * r * 0.85));
-      }
+    for (let s = 7; s <= 40; s += 6) {
+      candidates.push(new Vector2(doorSpawn.x + dx * s, doorSpawn.y + dy * s));
     }
 
-    let best = doorSpawn.clone();
-    let bestScore = -1e9;
+    const minComfort = 20;
+
+    type Scored = { p: Vector2; minEdge: number; doorDist: number };
+    const scored: Scored[] = [];
 
     for (const raw of candidates) {
       const p = raw.clone();
@@ -183,20 +197,24 @@ export class RoomManager {
         this.clampPointToPlayfield(p, ph, room);
       }
       if (circleOverlapsObstacle(p.x, p.y, ph - 0.25, obs)) continue;
-
       let minEdge = 1e9;
       for (const e of this.game.enemies) {
         if (!e.isActive || e.markedForDeletion) continue;
         const edge = p.distanceTo(e.position) - ph - e.size / 2;
         minEdge = Math.min(minEdge, edge);
       }
-      if (minEdge > bestScore) {
-        bestScore = minEdge;
-        best = p.clone();
-      }
+      scored.push({ p, minEdge, doorDist: p.distanceTo(doorSpawn) });
     }
 
-    return best;
+    if (scored.length === 0) return doorSpawn.clone();
+
+    const ok = scored.filter((s) => s.minEdge >= minComfort);
+    const pool = ok.length > 0 ? ok : scored;
+    pool.sort((a, b) => {
+      if (a.doorDist !== b.doorDist) return a.doorDist - b.doorDist;
+      return b.minEdge - a.minEdge;
+    });
+    return pool[0]!.p.clone();
   }
 
   /** Push enemies apart on spawn so they do not start stacked. */
@@ -310,8 +328,31 @@ export class RoomManager {
         case 'widow':
           enemy = new Widow(spawn.position.clone(), this.game);
           break;
-        case 'broodmother':
-          enemy = new Broodmother(spawn.position.clone(), this.game);
+        case 'toxicspitter':
+          enemy = new ToxicSpitter(spawn.position.clone(), this.game);
+          break;
+        case 'tidecrawler':
+          enemy = new TideCrawler(spawn.position.clone(), this.game);
+          break;
+        case 'broodmother': {
+          const variant =
+            this.currentRoomIndex === ROOM_COUNT - 1
+              ? ('flooded' as const)
+              : ('standard' as const);
+          enemy = new Broodmother(spawn.position.clone(), this.game, variant);
+          break;
+        }
+        case 'gillstalker':
+          enemy = new GillStalker(spawn.position.clone(), this.game);
+          break;
+        case 'murkleech':
+          enemy = new MurkLeech(spawn.position.clone(), this.game);
+          break;
+        case 'brinescuttler':
+          enemy = new BrineScuttler(spawn.position.clone(), this.game);
+          break;
+        case 'trenchmatriarch':
+          enemy = new TrenchMatriarch(spawn.position.clone(), this.game);
           break;
       }
 
@@ -332,6 +373,16 @@ export class RoomManager {
 
     AudioManager.play('SFX_DOOR_PASS', 0.88);
     this.loadRoom(roomIndex);
+  }
+
+  /** Direction of the door from `fromIndex` that leads to `toIndex`, if any. */
+  findDirectionToRoom(fromIndex: number, toIndex: number): Direction | null {
+    const room = this.rooms.get(fromIndex);
+    if (!room) return null;
+    for (const [dir, door] of room.doors) {
+      if (door.targetRoom === toIndex) return dir;
+    }
+    return null;
   }
 
   checkRoomCleared(): void {
@@ -356,8 +407,21 @@ export class RoomManager {
       return;
     }
 
+    if (this.currentRoomIndex === CHAPTER_1_LAST_ROOM_INDEX) {
+      this.game.markChapterBridgePending();
+    }
+
+    if (this.currentRoomIndex === 1) {
+      this.game.unlockDash();
+    }
+
     if (this.currentRoomIndex > 0) {
-      const upgrades = getRandomUpgrades(3);
+      const upgrades = getRandomUpgrades(3, {
+        roomIndex: this.currentRoomIndex,
+        theme: this.currentRoom.themeId,
+        difficulty: this.game.difficulty,
+        dashUnlocked: this.game.player.dashUnlocked,
+      });
       this.game.showUpgradeSelection(upgrades);
     }
   }

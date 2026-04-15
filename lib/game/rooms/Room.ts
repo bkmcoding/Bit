@@ -20,7 +20,13 @@ export interface SpawnPoint {
     | 'brute'
     | 'skitter'
     | 'widow'
-    | 'broodmother';
+    | 'toxicspitter'
+    | 'tidecrawler'
+    | 'broodmother'
+    | 'gillstalker'
+    | 'murkleech'
+    | 'brinescuttler'
+    | 'trenchmatriarch';
 }
 
 export interface Door {
@@ -614,6 +620,78 @@ export class Room {
         drawMoldBlob(wt + innerW * 0.45, wt + 12, 6, 5, 0.1, '#1a1410');
         break;
       }
+      case 'flooded': {
+        for (let i = 0; i < 12; i++) {
+          drawWaterPuddle(
+            wt + 10 + this.decorRand(140 + i) * (innerW - 20),
+            wt + 8 + this.decorRand(160 + i) * (innerH - 16),
+            8 + this.decorRand(180 + i) * 14,
+            4 + this.decorRand(200 + i) * 7,
+            0.34 + this.decorRand(210 + i) * 0.12
+          );
+        }
+        for (let i = 0; i < 22; i++) {
+          const bx = wt + 6 + this.decorRand(400 + i) * (innerW - 12);
+          const by = wt + 6 + this.decorRand(500 + i) * (innerH - 12);
+          ctx.fillStyle = `rgba(130, 230, 255, ${0.07 + this.decorRand(600 + i) * 0.12})`;
+          ctx.beginPath();
+          ctx.arc(bx, by, 0.9 + this.decorRand(700 + i) * 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.strokeStyle = 'rgba(55, 95, 110, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.45;
+        for (let s = 0; s < 5; s++) {
+          const y0 = wt + 14 + s * (innerH / 5);
+          ctx.beginPath();
+          ctx.moveTo(wt + 4, y0);
+          for (let x = 0; x < 9; x++) {
+            const xx = wt + 8 + (x * innerW) / 8;
+            ctx.lineTo(xx + Math.sin(x * 1.1 + s) * 3, y0 + x * 1.2);
+          }
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        drawVineColumn(wt + 2, wt + 5, h - wt - 5, 0.2, '#275460');
+        drawVineColumn(w - wt - 2, wt + 8, h - wt - 10, 1.6, '#1d4551');
+        drawVineColumn(w * 0.48, wt + 4, h * 0.55, 0.9, '#2f6570');
+        break;
+      }
+      case 'toxicworks': {
+        for (let i = 0; i < 10; i++) {
+          drawWaterPuddle(
+            wt + 12 + this.decorRand(220 + i) * (innerW - 24),
+            wt + 8 + this.decorRand(250 + i) * (innerH - 18),
+            7 + this.decorRand(300 + i) * 11,
+            5 + this.decorRand(340 + i) * 6,
+            0.28 + this.decorRand(350 + i) * 0.14
+          );
+        }
+        for (let i = 0; i < 5; i++) {
+          drawRustStreak(wt + 6 + i * 9, wt + 8 + i * 10, innerH - 18, true);
+        }
+        for (let i = 0; i < 18; i++) {
+          const gx = wt + 10 + this.decorRand(800 + i) * (innerW - 20);
+          const gy = wt + 10 + this.decorRand(820 + i) * (innerH - 20);
+          ctx.fillStyle = `rgba(110, 255, 130, ${0.05 + this.decorRand(840 + i) * 0.09})`;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 1 + this.decorRand(860 + i) * 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.strokeStyle = 'rgba(40, 70, 32, 0.55)';
+        ctx.lineWidth = 1.2;
+        for (let p = 0; p < 4; p++) {
+          const x0 = wt + 10 + p * (innerW / 4);
+          ctx.beginPath();
+          ctx.moveTo(x0, h - wt - 6);
+          ctx.lineTo(x0 + 3, h - wt - 22 - p * 5);
+          ctx.stroke();
+        }
+        drawMoldBlob(w * 0.45, h * 0.48, 10, 8, 0.2, '#203018');
+        drawMoldBlob(w * 0.62, h * 0.58, 8, 6, -0.3, '#1a2a12');
+        drawMoldBlob(w * 0.28, h * 0.35, 9, 7, 0.4, '#243820');
+        break;
+      }
     }
 
     if (this.isBossRoom) {
@@ -625,7 +703,14 @@ export class Room {
 
     // Light corner mold on all themes
     ctx.globalAlpha = 0.25;
-    ctx.fillStyle = this.themeId === 'moss' ? '#1a2820' : '#141210';
+    ctx.fillStyle =
+      this.themeId === 'moss'
+        ? '#1a2820'
+        : this.themeId === 'flooded'
+          ? '#10222a'
+          : this.themeId === 'toxicworks'
+            ? '#1a2612'
+            : '#141210';
     const corners = [
       [wt + 6, wt + 6],
       [w - wt - 10, wt + 6],

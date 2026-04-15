@@ -63,7 +63,27 @@ export class InputManager {
     this.keys.add(key);
     
     // Prevent default for game keys
-    if (['w', 'a', 's', 'd', ' ', 'escape'].includes(key)) {
+    if (
+      [
+        'w',
+        'a',
+        's',
+        'd',
+        ' ',
+        'escape',
+        'f1',
+        'f2',
+        'f3',
+        'f4',
+        'f5',
+        'f6',
+        'f9',
+        'y',
+        'pagedown',
+        'pageup',
+        'shift',
+      ].includes(key)
+    ) {
       e.preventDefault();
     }
   }

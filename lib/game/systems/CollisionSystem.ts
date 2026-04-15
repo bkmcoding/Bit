@@ -2,6 +2,8 @@ import type { Game } from '../engine/Game';
 import type { Entity } from '../entities/Entity';
 import { Projectile } from '../entities/Projectile';
 import { Enemy } from '../entities/enemies/Enemy';
+import { Dasher } from '../entities/enemies/Dasher';
+import { GillStalker } from '../entities/enemies/GillStalker';
 import { circleOverlapsObstacle } from '../utils/obstacleCollision';
 
 export class CollisionSystem {
@@ -59,7 +61,9 @@ export class CollisionSystem {
       if (!enemy.isActive) continue;
       
       if (this.checkCollision(enemy, this.game.player)) {
-        this.game.player.takeDamage(enemy.damage);
+        const hitKind =
+          enemy instanceof Dasher || enemy instanceof GillStalker ? 'charge' : 'melee';
+        this.game.player.takeDamage(enemy.damage, { hitKind });
       }
     }
   }

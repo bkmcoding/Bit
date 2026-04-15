@@ -18,7 +18,12 @@ import {
   type RoomThemeId,
 } from '../utils/constants';
 import type { MinimapLayout } from '../rooms/roomData';
+import {
+  CHAPTER_1_LAST_ROOM_INDEX,
+  CHAPTER_2_FIRST_ROOM_INDEX,
+} from '../rooms/chapterConfig';
 import { Broodmother } from '../entities/enemies/Broodmother';
+import { TrenchMatriarch } from '../entities/enemies/TrenchMatriarch';
 import { hiveMindSteerUnit, type HiveRole } from '../systems/HiveMind';
 import { Vector2 } from '../utils/Vector2';
 import { resolveCircleObstacles } from '../utils/obstacleCollision';
@@ -27,6 +32,7 @@ import type { GamePostUniforms } from '../rendering/webglHorrorPresent';
 import { getMoonShaftForRoom } from '../rendering/roomMoonlight';
 import { AudioManager } from '../audio/AudioManager';
 import type { Upgrade } from '../upgrades/Upgrade';
+import { getRandomUpgrades } from '../upgrades/upgradePool';
 
 export type RoomHudPayload = {
   current: number;
@@ -35,6 +41,17 @@ export type RoomHudPayload = {
   minimap: MinimapLayout;
   /** Rooms the player has entered this run (for radar fade). */
   enteredRooms: number[];
+  chapter: 1 | 2;
+  /** Shift-dash stamina (unlocks after clearing sector 2). */
+  dash: { unlocked: boolean; stamina: number; max: number };
+};
+
+export type DevPanelPayload = {
+  unlocked: boolean;
+  panelOpen: boolean;
+  godMode: boolean;
+  gameState: GameState;
+  roomLine: string;
 };
 
 export interface GameCallbacks {
@@ -43,6 +60,8 @@ export interface GameCallbacks {
   onRoomChange?: (payload: RoomHudPayload) => void;
   onUpgradeSelect?: (upgrades: Upgrade[]) => void;
   onGameOver?: (victory: boolean) => void;
+  /** Dev HUD (React overlay); canvas dev text was unreliable with WebGL + menu (no game loop). */
+  onDevPanelChange?: (payload: DevPanelPayload) => void;
   /** WebGL post: native-res buffer → GPU. When set, Canvas horror overlay is skipped. */
   onPresentFrame?: (source: HTMLCanvasElement, uniforms: GamePostUniforms) => void;
 }
@@ -74,8 +93,18 @@ export class Game {
   /** Seconds since run start; WebGL horror shader (warp / grain / rare jolts). */
   private horrorTime: number = 0;
   private skitterCooldown: number = 0;
+  private hudDashThrottle = 0;
 
   private hiveMindRegistry: Map<Enemy, { i: number; n: number }> = new Map();
+  private dev = {
+    unlocked: false,
+    panelOpen: false,
+    godMode: false,
+  };
+
+  /** After sector 12 upgrade, show chapter map instead of PLAYING. */
+  private chapterBridgePending = false;
+  private chapter2Unlocked = false;
 
   private static rollRunSeed(): number {
     try {
@@ -141,6 +170,8 @@ export class Game {
   }
 
   private prepareNewRun(): void {
+    this.chapterBridgePending = false;
+    this.chapter2Unlocked = false;
     this.stop();
     this.hiveMindRegistry.clear();
     this.entities = [];
@@ -164,7 +195,8 @@ export class Game {
   setState(newState: GameState): void {
     this.state = newState;
     this.callbacks.onStateChange?.(newState);
-    
+    if (this.dev.unlocked) this.emitDevPanel();
+
     if (newState === 'GAME_OVER') {
       AudioManager.play('SFX_GAME_OVER');
       this.callbacks.onGameOver?.(false);
@@ -187,6 +219,8 @@ export class Game {
   };
 
   private update(deltaTime: number): void {
+    this.handleDeveloperBackdoor();
+
     // Handle pause toggle
     if (this.input.isKeyJustPressed('escape')) {
       if (this.state === 'PLAYING') {
@@ -197,14 +231,21 @@ export class Game {
       }
     }
 
+    if (this.state === 'CHAPTER_MAP') return;
     if (this.state !== 'PLAYING') return;
+
+    if (this.dev.godMode) {
+      // Keep the player effectively unkillable while still allowing normal movement/testing.
+      this.player.grantSpawnProtection(0.25);
+      this.player.health = this.player.maxHealth;
+      this.notifyHealthChange();
+    }
 
     this.refreshHiveMindRegistry();
 
-    // Update player
-    this.player.update(deltaTime);
+    this.player.resetEnvironmentMoveMult();
 
-    // Update enemies
+    // Enemies first so hazards (e.g. webs) can set movement penalties before the player moves.
     for (const enemy of this.enemies) {
       if (enemy.isActive) {
         enemy.update(deltaTime);
@@ -212,6 +253,8 @@ export class Game {
     }
 
     this.applyEnemySeparation(deltaTime);
+
+    this.player.update(deltaTime);
 
     const cr = this.roomManager.currentRoom;
     const pBw = cr?.width ?? GAME.BUFFER_WIDTH;
@@ -234,6 +277,12 @@ export class Game {
     // Check room cleared
     this.roomManager.checkRoomCleared();
 
+    this.hudDashThrottle += deltaTime;
+    if (this.player.dashUnlocked && this.hudDashThrottle >= 0.1) {
+      this.hudDashThrottle = 0;
+      this.notifyRoomChange();
+    }
+
     // Check door transitions
     this.checkDoorTransition();
 
@@ -248,6 +297,80 @@ export class Game {
     this.horrorTime += deltaTime;
 
     this.updateEnemySkitter(deltaTime);
+  }
+
+  private handleDeveloperBackdoor(): void {
+    /** Unlock chord is handled in GameCanvas (window listener) so it works on the main menu before the game loop runs. */
+    if (!this.dev.unlocked) return;
+
+    if (this.input.isKeyJustPressed('f1')) {
+      this.dev.panelOpen = !this.dev.panelOpen;
+      this.emitDevPanel();
+    }
+    if (this.input.isKeyJustPressed('f2')) {
+      this.dev.godMode = !this.dev.godMode;
+      this.emitDevPanel();
+    }
+    if (this.input.isKeyJustPressed('f3') && this.state === 'PLAYING') {
+      this.clearAllEnemiesInRoom();
+    }
+    if (this.input.isKeyJustPressed('f4')) {
+      this.player.health = this.player.maxHealth;
+      this.notifyHealthChange();
+    }
+    if (this.input.isKeyJustPressed('f5') && this.state === 'PLAYING') {
+      const room = this.roomManager.currentRoom;
+      const upgrades = getRandomUpgrades(3, {
+        roomIndex: this.roomManager.currentRoomIndex,
+        theme: room?.themeId,
+        difficulty: this.difficulty,
+        dashUnlocked: this.player.dashUnlocked,
+      });
+      this.showUpgradeSelection(upgrades);
+    }
+    if (this.input.isKeyJustPressed('f6') && this.state === 'PLAYING') {
+      this.roomManager.loadRoom(this.roomManager.currentRoomIndex);
+    }
+    if (this.input.isKeyJustPressed('pageup')) {
+      this.jumpToRoom(this.roomManager.currentRoomIndex + 1);
+    }
+    if (this.input.isKeyJustPressed('pagedown')) {
+      this.jumpToRoom(this.roomManager.currentRoomIndex - 1);
+    }
+  }
+
+  private emitDevPanel(): void {
+    this.callbacks.onDevPanelChange?.({
+      unlocked: this.dev.unlocked,
+      panelOpen: this.dev.panelOpen,
+      godMode: this.dev.godMode,
+      gameState: this.state,
+      roomLine: `${this.roomManager.currentRoomIndex + 1}/${this.roomManager.totalRooms}`,
+    });
+  }
+
+  /** Toggle dev unlock + panel (called from GameCanvas window keydown; works on main menu). */
+  applyDevBackdoorToggle(): void {
+    this.dev.unlocked = !this.dev.unlocked;
+    this.dev.panelOpen = this.dev.unlocked;
+    this.emitDevPanel();
+  }
+
+  private clearAllEnemiesInRoom(): void {
+    for (const e of this.enemies) {
+      e.markedForDeletion = true;
+    }
+    this.cleanupEntities();
+    this.roomManager.checkRoomCleared();
+  }
+
+  private jumpToRoom(roomIndex: number): void {
+    const max = Math.max(0, this.roomManager.totalRooms - 1);
+    const target = Math.max(0, Math.min(max, roomIndex));
+    this.roomManager.loadRoom(target);
+    if (this.state === 'PAUSED' || this.state === 'UPGRADE') {
+      this.setState('PLAYING');
+    }
   }
 
   /** Proximity-based insect leg / chitin one-shots (optional MP3 + settings). */
@@ -406,6 +529,7 @@ export class Game {
     } else if (this.state !== 'MENU') {
       this.renderHorrorOverlay(ctx);
     }
+
   }
 
   /** Dark + vignette + corner pools — no radial triangles (those read as a “star” on screen). */
@@ -508,6 +632,14 @@ export class Game {
 
     const door = room.getDoorAt(this.player.position);
     if (door && door.isOpen && door.targetRoom >= 0) {
+      if (
+        this.roomManager.currentRoomIndex === CHAPTER_1_LAST_ROOM_INDEX &&
+        door.targetRoom === CHAPTER_2_FIRST_ROOM_INDEX &&
+        !this.chapter2Unlocked
+      ) {
+        this.setState('CHAPTER_MAP');
+        return;
+      }
       this.roomManager.transitionToRoom(door.targetRoom, door.direction);
     }
   }
@@ -520,9 +652,17 @@ export class Game {
   // Add an enemy to the game
   spawnEnemy(enemy: Enemy): void {
     const s = DIFFICULTY_SETTINGS[this.difficulty];
-    const boss = enemy instanceof Broodmother;
-    const hMult = s.enemyHealthMult * (boss ? s.bossHealthMult : 1);
-    const dMult = s.enemyDamageMult * (boss ? s.bossDamageMult : 1);
+    const boss = enemy instanceof Broodmother || enemy instanceof TrenchMatriarch;
+    let hMult = s.enemyHealthMult * (boss ? s.bossHealthMult : 1);
+    let dMult = s.enemyDamageMult * (boss ? s.bossDamageMult : 1);
+    if (boss && this.roomManager.currentRoomIndex === CHAPTER_1_LAST_ROOM_INDEX) {
+      hMult *= s.chapter1BroodHealthFactor;
+      dMult *= s.chapter1BroodDamageFactor;
+    }
+    if (boss && enemy instanceof Broodmother && enemy.variant === 'flooded') {
+      hMult *= 1.12;
+      dMult *= 1.04;
+    }
     enemy.maxHealth = Math.max(1, Math.round(enemy.maxHealth * hMult));
     enemy.health = enemy.maxHealth;
     enemy.damage = Math.max(1, Math.round(enemy.damage * dMult));
@@ -554,7 +694,11 @@ export class Game {
     this.hiveMindRegistry.clear();
     if (this.difficulty !== 'hard') return;
     const list = this.enemies.filter(
-      e => e.isActive && !e.markedForDeletion && !(e instanceof Broodmother)
+      e =>
+        e.isActive &&
+        !e.markedForDeletion &&
+        !(e instanceof Broodmother) &&
+        !(e instanceof TrenchMatriarch)
     );
     const n = list.length;
     for (let i = 0; i < n; i++) {
@@ -597,13 +741,29 @@ export class Game {
   // Notify UI of room change
   notifyRoomChange(): void {
     const room = this.roomManager.currentRoom;
+    const idx = this.roomManager.currentRoomIndex;
     this.callbacks.onRoomChange?.({
-      current: this.roomManager.currentRoomIndex,
+      current: idx,
       total: this.roomManager.totalRooms,
       theme: room?.themeId ?? 'cellar',
       minimap: this.roomManager.minimapLayout,
       enteredRooms: this.roomManager.getEnteredRoomsSnapshot(),
+      chapter: idx >= CHAPTER_2_FIRST_ROOM_INDEX ? 2 : 1,
+      dash: {
+        unlocked: this.player.dashUnlocked,
+        stamina: this.player.dashStamina,
+        max: this.player.dashStaminaMax,
+      },
     });
+    if (this.dev.unlocked) this.emitDevPanel();
+  }
+
+  /** Unlocks after clearing the second sector (linear dash + stamina pool). */
+  unlockDash(): void {
+    if (this.player.dashUnlocked) return;
+    this.player.dashUnlocked = true;
+    this.player.dashStamina = this.player.dashStaminaMax;
+    this.notifyRoomChange();
   }
 
   // Show upgrade selection
@@ -612,11 +772,47 @@ export class Game {
     this.callbacks.onUpgradeSelect?.(upgrades);
   }
 
+  markChapterBridgePending(): void {
+    this.chapterBridgePending = true;
+  }
+
+  /**
+   * Chapter 2 entry: optional path bonus, then load first flooded sector.
+   * `adaptation` — mitigation; `mutation` — offense (risk/reward).
+   */
+  continueToChapter2(path: 'adaptation' | 'mutation'): void {
+    this.chapter2Unlocked = true;
+    if (path === 'adaptation') {
+      this.player.damageTakenMult *= 0.9;
+      this.player.hitInvulnBonus += 0.2;
+    } else {
+      this.player.damage += 1;
+      this.player.fireRate *= 0.92;
+    }
+    this.notifyHealthChange();
+    const dir = this.roomManager.findDirectionToRoom(
+      CHAPTER_1_LAST_ROOM_INDEX,
+      CHAPTER_2_FIRST_ROOM_INDEX
+    );
+    this.setState('PLAYING');
+    if (dir) {
+      this.roomManager.transitionToRoom(CHAPTER_2_FIRST_ROOM_INDEX, dir);
+    } else {
+      this.roomManager.loadRoom(CHAPTER_2_FIRST_ROOM_INDEX);
+    }
+  }
+
   // Apply selected upgrade
   applyUpgrade(upgrade: Upgrade): void {
     AudioManager.play('SFX_UPGRADE');
     upgrade.apply(this.player);
     this.notifyHealthChange();
+    const bridge = this.chapterBridgePending;
+    this.chapterBridgePending = false;
+    if (bridge) {
+      this.setState('CHAPTER_MAP');
+      return;
+    }
     this.setState('PLAYING');
   }
 

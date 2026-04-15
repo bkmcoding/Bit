@@ -27,7 +27,10 @@ const CROSS_MS = 1900
 const BOOT_STATIC_MS = 3200
 const BOOT_TAIL_MS = 350
 /** Veil + static grain ease; longer reads smoother on screen. */
-const INTRO_FADE_MS = 2200
+/** Longer tail so static does not “snap” off; curve eases out gently. */
+const INTRO_FADE_MS = 3800
+/** Ease for intro veil → menu — slow start/end, no hard cutoff. */
+const INTRO_FADE_EASE = 'cubic-bezier(0.2, 0.05, 0.12, 1)'
 /** Audio crossfade: static tails out while menu theme rises (can run longer than the veil). */
 const AUDIO_STATIC_FADE_OUT_MS = 3600
 const AUDIO_MENU_FADE_IN_MS = 3200
@@ -37,9 +40,15 @@ const START_RUN_MS = 1400
 /** Visual snow eases in after power-on (matches static audio roughly). */
 const STATIC_VISUAL_FADE_IN_MS = 900
 const STATIC_AUDIO_FADE_IN_MS = 900
+/** Must match `tv-standby-blink` on the standby LED — also drives the sync pulse beeps. */
+const STANDBY_BLINK_PERIOD_MS = 1250
 
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3)
+}
+
+function easeInOutQuint(t: number) {
+  return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2
 }
 
 /**
@@ -60,13 +69,13 @@ function useWhiteNoiseCanvas(staticBleedRef: MutableRefObject<number>) {
     const ctx = c.getContext('2d')
     if (!ctx) return
     const b = staticBleedRef.current
-    const bias = 18 + 22 * b
+    const bias = 17 + 21 * b
     const img = ctx.createImageData(w, h)
     const d = img.data
     for (let i = 0; i < d.length; i += 4) {
       const v = Math.random() * 255
       const n = v > 128 - bias ? 255 : 0
-      const alpha = Math.round(95 + 105 * b)
+      const alpha = Math.round(88 + 82 * b)
       d[i] = n
       d[i + 1] = n
       d[i + 2] = n
@@ -74,7 +83,7 @@ function useWhiteNoiseCanvas(staticBleedRef: MutableRefObject<number>) {
     }
     ctx.putImageData(img, 0, 0)
 
-    c.style.opacity = String(0.11 + 0.31 * b)
+    c.style.opacity = String(0.1 + 0.24 * b)
     c.style.mixBlendMode = b > 0.22 ? 'screen' : 'overlay'
   }, [staticBleedRef])
 
@@ -118,6 +127,27 @@ export function MainMenu({ onStart }: MainMenuProps) {
     justPoweredOnRef.current = true
     setAwaitingStandby(false)
   }, [])
+
+  /** Low beep locked to the standby LED blink (Web Audio unlocks after first gesture if needed). */
+  useEffect(() => {
+    if (!awaitingStandby) return
+    let cancelled = false
+    let intervalId: ReturnType<typeof setInterval> | undefined
+    void AudioManager.initialize()
+      .then(() => {
+        if (cancelled) return
+        const tick = () => {
+          AudioManager.playMenuStandbyPulse()
+        }
+        tick()
+        intervalId = setInterval(tick, STANDBY_BLINK_PERIOD_MS)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      if (intervalId !== undefined) clearInterval(intervalId)
+    }
+  }, [awaitingStandby])
 
   useEffect(() => {
     if (awaitingStandby) return
@@ -201,7 +231,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
     let frame: number
     const step = (now: number) => {
       const t = Math.min(1, (now - start) / INTRO_FADE_MS)
-      staticBleedRef.current = 1 - easeOutCubic(t)
+      staticBleedRef.current = 1 - easeInOutQuint(t)
       if (t < 1) {
         frame = requestAnimationFrame(step)
       } else {
@@ -335,7 +365,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
             style={{
               backgroundColor: MENU.bloodHi,
               boxShadow: `0 0 10px ${MENU.bloodHi}, 0 0 22px rgba(140, 36, 42, 0.45)`,
-              animation: 'tv-standby-blink 1.25s ease-in-out infinite',
+              animation: `tv-standby-blink ${STANDBY_BLINK_PERIOD_MS}ms ease-in-out infinite`,
             }}
             aria-hidden
           />
@@ -363,10 +393,11 @@ export function MainMenu({ onStart }: MainMenuProps) {
       {/* Dark veil + static: fades out automatically (no text, no click). */}
       {introLayerMounted && (
         <div
-          className="absolute inset-0 z-40 pointer-events-none transition-opacity ease-in-out"
+          className="absolute inset-0 z-40 pointer-events-none transition-opacity"
           style={{
             opacity: introOpaque ? 1 : 0,
             transitionDuration: `${INTRO_FADE_MS}ms`,
+            transitionTimingFunction: INTRO_FADE_EASE,
             background: 'rgba(2, 1, 1, 0.92)',
           }}
           onTransitionEnd={introFadeDone}
@@ -400,7 +431,7 @@ export function MainMenu({ onStart }: MainMenuProps) {
         }`}
         style={{
           opacity: introOpaque ? 0 : 1,
-          transition: `opacity ${INTRO_FADE_MS}ms ease-in-out`,
+          transition: `opacity ${INTRO_FADE_MS}ms ${INTRO_FADE_EASE}`,
           pointerEvents: introOpaque ? 'none' : 'auto',
         }}
       >

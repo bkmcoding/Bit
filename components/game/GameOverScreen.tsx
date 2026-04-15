@@ -42,7 +42,7 @@ export function GameOverScreen({ isVictory, onRestart, onMainMenu }: GameOverScr
               Hollow quiet
             </h2>
             <p className="mb-10 text-sm leading-relaxed" style={{ color: MENU.boneDim, ...mono }}>
-              The Broodmother is still. For now, the box is yours.
+              The trench goes quiet. For now, the box is yours.
             </p>
             <div className="mb-10 opacity-[0.35]" style={{ transform: 'rotate(180deg)' }}>
               <svg width="64" height="48" viewBox="0 0 80 60" aria-hidden={true}>

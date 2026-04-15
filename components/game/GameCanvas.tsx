@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Game, type RoomHudPayload } from '@/lib/game/engine/Game';
+import { Game, type DevPanelPayload, type RoomHudPayload } from '@/lib/game/engine/Game';
 import { GAME, type GameState, type Difficulty } from '@/lib/game/utils/constants';
 import { ROOM_COUNT, type MinimapLayout } from '@/lib/game/rooms/roomData';
 import type { Upgrade } from '@/lib/game/upgrades/Upgrade';
@@ -12,6 +12,8 @@ import { MainMenu } from './MainMenu';
 import { PauseMenu } from './PauseMenu';
 import { UpgradeModal } from './UpgradeModal';
 import { GameOverScreen } from './GameOverScreen';
+import { DevToolsPanel } from './DevToolsPanel';
+import { ChapterMapScreen } from './ChapterMapScreen';
 
 /** Fade to black before first run; menu audio ducks out before gameplay music fades in. */
 const MENU_TO_GAME_COVER_MS = 620;
@@ -35,11 +37,21 @@ export function GameCanvas() {
     theme: 'cellar',
     minimap: EMPTY_MINIMAP,
     enteredRooms: [],
+    chapter: 1,
+    dash: { unlocked: false, stamina: 0, max: 1 },
   });
   const [upgrades, setUpgrades] = useState<Upgrade[]>([]);
   const [isVictory, setIsVictory] = useState(false);
   /** Fullscreen black cover opacity (0–1) for menu → gameplay. */
   const [menuToGameCover, setMenuToGameCover] = useState(0);
+
+  const [devHud, setDevHud] = useState<DevPanelPayload>({
+    unlocked: false,
+    panelOpen: false,
+    godMode: false,
+    gameState: 'MENU',
+    roomLine: '—',
+  });
 
   const gameStateRef = useRef<GameState>('MENU');
   useEffect(() => {
@@ -89,13 +101,25 @@ export function GameCanvas() {
       onRoomChange: setHud,
       onUpgradeSelect: setUpgrades,
       onGameOver: (victory) => setIsVictory(victory),
+      onDevPanelChange: setDevHud,
       onPresentFrame: presenter ? (src, u) => presenter.present(src, u) : undefined,
     });
 
     game.attach(presenter ? glCanvas : buffer);
     gameRef.current = game;
 
+    /** Dev unlock must run here: the game loop is not active on the main menu before the first run. */
+    const onDevChord = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.repeat) return;
+      if (e.code !== 'F9' && e.code !== 'KeyY') return;
+      e.preventDefault();
+      e.stopPropagation();
+      game.applyDevBackdoorToggle();
+    };
+    document.addEventListener('keydown', onDevChord, true);
+
     return () => {
+      document.removeEventListener('keydown', onDevChord, true);
       presenter?.dispose();
       game.detach();
       gameRef.current = null;
@@ -121,14 +145,18 @@ export function GameCanvas() {
     gameRef.current?.restart();
   }, []);
 
-  const handleMainMenu = useCallback(() => {
+  const handleMainMenu = useCallback(async () => {
+    await AudioManager.returnToMainMenuFromRun();
     gameRef.current?.setState('MENU');
-    void AudioManager.playMusic('MUSIC_MENU');
   }, []);
 
   const handleUpgradeSelect = useCallback((upgrade: Upgrade) => {
     gameRef.current?.applyUpgrade(upgrade);
     setUpgrades([]);
+  }, []);
+
+  const handleChapterContinue = useCallback((path: 'adaptation' | 'mutation') => {
+    gameRef.current?.continueToChapter2(path);
   }, []);
 
   useEffect(() => {
@@ -203,6 +231,8 @@ export function GameCanvas() {
             theme={hud.theme}
             minimap={hud.minimap}
             enteredRooms={hud.enteredRooms}
+            chapter={hud.chapter}
+            dash={hud.dash}
           />
         )}
 
@@ -235,6 +265,12 @@ export function GameCanvas() {
           />
         )}
       </div>
+
+      {gameState === 'CHAPTER_MAP' && (
+        <ChapterMapScreen onContinue={handleChapterContinue} />
+      )}
+
+      <DevToolsPanel hud={devHud} />
     </div>
   );
 }

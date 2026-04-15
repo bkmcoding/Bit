@@ -2,6 +2,7 @@ import { Enemy } from './Enemy';
 import { Projectile } from '../Projectile';
 import { Vector2 } from '../../utils/Vector2';
 import { ENEMY, COLORS } from '../../utils/constants';
+import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
 
 /** Kites at range and fires short bursts of venom shots. */
@@ -61,12 +62,14 @@ export class Widow extends Enemy {
   private fireShot(): void {
     const spread = (Math.random() - 0.5) * 0.12;
     const dir = this.getDirectionToPlayer().rotate(spread);
+    AudioManager.play('SFX_ENEMY_NEEDLE', 0.4);
     const projectile = new Projectile({
       position: this.position.clone(),
       direction: dir,
       isPlayerProjectile: false,
       damage: this.damage,
       speed: ENEMY.WIDOW.projectileSpeed,
+      playerHitKind: 'needle',
     });
     this.game.spawnProjectile(projectile);
   }

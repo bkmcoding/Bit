@@ -1,6 +1,7 @@
 import { Enemy } from './Enemy';
 import { Vector2 } from '../../utils/Vector2';
 import { ENEMY, COLORS, HIVE_MIND_HARD } from '../../utils/constants';
+import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
 
 interface WebTrap {
@@ -70,8 +71,9 @@ export class WebSpinner extends Enemy {
     this.webs.push({
       position: this.position.clone(),
       lifetime: 8,
-      radius: 15,
+      radius: 26,
     });
+    AudioManager.play('SFX_WEB', 0.42);
   }
 
   protected die(): void {

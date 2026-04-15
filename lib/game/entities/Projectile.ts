@@ -2,6 +2,12 @@ import { Entity } from './Entity';
 import { Vector2 } from '../utils/Vector2';
 import { PROJECTILE, COLORS, COLLISION_LAYER, GAME } from '../utils/constants';
 
+/** Shapes player hurt SFX when this enemy projectile connects. */
+export type PlayerHitKind = 'projectile' | 'acid' | 'needle' | 'boss';
+
+/** Projectile flavor or body-hit type for `Player.takeDamage` audio. */
+export type PlayerHurtKind = PlayerHitKind | 'melee' | 'charge';
+
 export interface ProjectileOptions {
   position: Vector2;
   direction: Vector2;
@@ -11,12 +17,16 @@ export interface ProjectileOptions {
   piercing?: number;
   /** Hitbox / render diameter in pixels (default `PROJECTILE.SIZE`). */
   size?: number;
+  /** Enemy shots only — selects hurt sting when hitting the player. */
+  playerHitKind?: PlayerHitKind;
 }
 
 export class Projectile extends Entity {
   public damage: number;
   public isPlayerProjectile: boolean;
   public piercing: number;
+  /** Set for enemy projectiles; used when damaging the player. */
+  public playerHitKind: PlayerHitKind = 'projectile';
   
   private lifetime: number;
   private hitEntities: Set<string> = new Set();
@@ -36,6 +46,9 @@ export class Projectile extends Entity {
     this.isPlayerProjectile = isPlayer;
     this.damage = options.damage ?? 1;
     this.piercing = options.piercing ?? 0;
+    if (!isPlayer && options.playerHitKind) {
+      this.playerHitKind = options.playerHitKind;
+    }
     this.lifetime = PROJECTILE.LIFETIME;
     
     const speed = options.speed ?? (isPlayer ? PROJECTILE.PLAYER_SPEED : PROJECTILE.ENEMY_SPEED);

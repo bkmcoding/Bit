@@ -1,4 +1,5 @@
 import type { Upgrade } from './Upgrade';
+import { PLAYER, type Difficulty, type RoomThemeId } from '../utils/constants';
 
 /**
  * Single-projectile only (no multishot). Archetypes: sustain, mitigation (flat + i-frames),
@@ -6,6 +7,56 @@ import type { Upgrade } from './Upgrade';
  * hits and few hearts, flat mitigation and invuln read clearly.
  */
 export const ALL_UPGRADES: Upgrade[] = [
+  {
+    id: 'tidal-pacing',
+    name: 'Tidal Pacing',
+    description: 'Move and shot speed both climb with the current.',
+    icon: '≈',
+    apply: (player) => {
+      player.speed *= 1.08;
+      player.projectileSpeedMult *= 1.1;
+    },
+  },
+  {
+    id: 'antitoxin-lining',
+    name: 'Antitoxin Lining',
+    description: 'You harden against corrosive hits.',
+    icon: '☣',
+    apply: (player) => {
+      player.damageTakenMult *= 0.88;
+    },
+  },
+  {
+    id: 'sluice-guts',
+    name: 'Sluice Guts',
+    description: '+1 max HP and heal 1, but footsteps get heavier.',
+    icon: '◒',
+    apply: (player) => {
+      player.maxHealth += 1;
+      player.heal(1);
+      player.speed *= 0.94;
+    },
+  },
+  {
+    id: 'caustic-lance',
+    name: 'Caustic Lance',
+    description: '+1 damage and +1 pierce from concentrated venom.',
+    icon: '⤢',
+    apply: (player) => {
+      player.damage += 1;
+      player.piercing += 1;
+    },
+  },
+  {
+    id: 'pump-overdrive',
+    name: 'Pump Overdrive',
+    description: 'Faster fire, but less post-hit grace.',
+    icon: '⟲',
+    apply: (player) => {
+      player.fireRate *= 0.84;
+      player.hitInvulnBonus -= 0.15;
+    },
+  },
   {
     id: 'gristly-heart',
     name: 'Gristly Heart',
@@ -462,9 +513,196 @@ export const ALL_UPGRADES: Upgrade[] = [
       else player.everyNthKillHeal.amount += 1;
     },
   },
+  // —— Flooded / toxic arc (chapter 2) ——
+  {
+    id: 'brine-mail',
+    name: 'Brine Mail',
+    description: 'Salt crusts your hide; incoming hits sting ~8% less.',
+    icon: '◈',
+    apply: (player) => {
+      player.damageTakenMult *= 0.92;
+    },
+  },
+  {
+    id: 'sinker-sole',
+    name: 'Sinker Sole',
+    description: 'Heavier step (−5% move) but +0.2s grace after each hit.',
+    icon: '⌖',
+    apply: (player) => {
+      player.speed *= 0.95;
+      player.hitInvulnBonus += 0.2;
+    },
+  },
+  {
+    id: 'fang-urchin',
+    name: 'Fang Urchin',
+    description: '+1 damage; projectiles drift ~6% slower in draggy water.',
+    icon: '⦿',
+    apply: (player) => {
+      player.damage += 1;
+      player.projectileSpeedMult *= 0.94;
+    },
+  },
+  {
+    id: 'rip-current',
+    name: 'Rip Current',
+    description: '+12% shot speed and +1 pierce; you take ~4% more from hits.',
+    icon: '≋',
+    apply: (player) => {
+      player.projectileSpeedMult *= 1.12;
+      player.piercing += 1;
+      player.damageTakenMult *= 1.04;
+    },
+  },
+  {
+    id: 'abyss-tithe',
+    name: 'Abyss Tithe',
+    description: 'Enemy hits deal 1 less (min 1); wade ~4% slower in the flood.',
+    icon: '⊹',
+    apply: (player) => {
+      player.flatDamageMitigation += 1;
+      player.speed *= 0.96;
+    },
+  },
+  {
+    id: 'coral-bloom',
+    name: 'Coral Bloom',
+    description: '~14% crit chance; brittle legs (−5% move).',
+    icon: '✧',
+    apply: (player) => {
+      player.critChance = Math.min(0.85, player.critChance + 0.14);
+      player.critDamageMult = Math.max(player.critDamageMult, 2);
+      player.speed *= 0.95;
+    },
+  },
+  {
+    id: 'conduit-slime',
+    name: 'Conduit Slime',
+    description: 'Shots ~10% sooner; biofilm conducts pain (+3% damage taken).',
+    icon: '⟡',
+    apply: (player) => {
+      player.fireRate *= 0.9;
+      player.damageTakenMult *= 1.03;
+    },
+  },
+  {
+    id: 'gill-surge',
+    name: 'Gill Surge',
+    description: 'Dash stamina refills ~40% faster (after dash unlocks).',
+    icon: '∿',
+    apply: (player) => {
+      player.dashRegenMult *= 1.4;
+    },
+  },
+  {
+    id: 'abyss-lung',
+    name: 'Abyss Lung',
+    description: '+1 max dash charge (cap 4). Fills one pip if you already dash.',
+    icon: '⊕',
+    apply: (player) => {
+      const next = Math.min(PLAYER.DASH_STAMINA_CAP, player.dashStaminaMax + 1);
+      player.dashStaminaMax = next;
+      if (player.dashUnlocked) {
+        player.dashStamina = Math.min(player.dashStaminaMax, player.dashStamina + 1);
+      }
+    },
+  },
 ];
 
-export function getRandomUpgrades(count: number): Upgrade[] {
-  const shuffled = [...ALL_UPGRADES].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, Math.min(count, shuffled.length));
+export type UpgradeRollContext = {
+  roomIndex: number;
+  theme?: RoomThemeId;
+  difficulty?: Difficulty;
+  /** When false/undefined, dash-only cards are excluded from the roll. */
+  dashUnlocked?: boolean;
+};
+
+const DASH_ONLY_UPGRADE_IDS = new Set(['gill-surge', 'abyss-lung']);
+
+const TOXIC_ZONE_UPGRADES = new Set([
+  'tidal-pacing',
+  'antitoxin-lining',
+  'sluice-guts',
+  'caustic-lance',
+  'pump-overdrive',
+  'brine-mail',
+  'sinker-sole',
+  'fang-urchin',
+  'rip-current',
+  'abyss-tithe',
+  'coral-bloom',
+  'conduit-slime',
+  'gill-surge',
+  'abyss-lung',
+]);
+
+const CH2_DEFENSIVE_FIRST = new Set([
+  'antitoxin-lining',
+  'sluice-guts',
+  'brine-mail',
+  'sinker-sole',
+  'tidal-pacing',
+  'abyss-tithe',
+]);
+
+const CH2_OFFENSE_FIRST = new Set([
+  'caustic-lance',
+  'pump-overdrive',
+  'fang-urchin',
+  'rip-current',
+  'coral-bloom',
+  'conduit-slime',
+]);
+
+function sortToxicZoneCards(cards: Upgrade[], difficulty?: Difficulty): Upgrade[] {
+  if (!difficulty || difficulty === 'medium') return cards;
+  const rank = (id: string): number => {
+    if (difficulty === 'easy') {
+      if (CH2_DEFENSIVE_FIRST.has(id)) return 0;
+      if (CH2_OFFENSE_FIRST.has(id)) return 2;
+      return 1;
+    }
+    if (CH2_OFFENSE_FIRST.has(id)) return 0;
+    if (CH2_DEFENSIVE_FIRST.has(id)) return 2;
+    return 1;
+  };
+  return [...cards].sort((a, b) => rank(a.id) - rank(b.id));
+}
+
+function isToxicZone(context?: UpgradeRollContext): boolean {
+  if (!context) return false;
+  return (
+    context.theme === 'flooded' ||
+    context.theme === 'toxicworks' ||
+    context.roomIndex >= 12
+  );
+}
+
+export function getRandomUpgrades(count: number, context?: UpgradeRollContext): Upgrade[] {
+  const safeCount = Math.max(1, Math.min(count, ALL_UPGRADES.length));
+  const dashOk = context?.dashUnlocked === true;
+  const eligible = ALL_UPGRADES.filter(
+    (u) => !DASH_ONLY_UPGRADE_IDS.has(u.id) || dashOk
+  );
+  const shuffled = [...eligible].sort(() => Math.random() - 0.5);
+  if (!isToxicZone(context)) {
+    return shuffled.slice(0, safeCount);
+  }
+
+  const zoneCards = sortToxicZoneCards(
+    shuffled.filter((u) => TOXIC_ZONE_UPGRADES.has(u.id)),
+    context?.difficulty
+  );
+  const genericCards = shuffled.filter((u) => !TOXIC_ZONE_UPGRADES.has(u.id));
+  const picks: Upgrade[] = [];
+
+  if (zoneCards.length > 0) picks.push(zoneCards[0]);
+  for (const card of genericCards) {
+    if (picks.length >= safeCount) break;
+    picks.push(card);
+  }
+  for (let i = 1; i < zoneCards.length && picks.length < safeCount; i++) {
+    picks.push(zoneCards[i]);
+  }
+  return picks.slice(0, safeCount);
 }

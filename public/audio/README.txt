@@ -19,6 +19,7 @@ public/audio/
 ├── menu-music.mp3      (Background music for main menu)
 ├── game-music.mp3      (Background music during gameplay)
 ├── boss-music.mp3      (Background music for boss fight)
+├── water-music.mp3     (Optional — chapter II / flooded sectors; also tries chapter2-music.mp3, music_water.mp3)
 ├── ambience/           (Optional looping beds — volumes in lib/game/settings/atmosphere-audio.ts)
 │   ├── white-noise.mp3   (Harsh static / wind; also tries ambience_white_noise.mp3)
 │   └── cave.mp3          (Drips, rumble; also tries ambience-cave.mp3)

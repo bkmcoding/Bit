@@ -2,6 +2,7 @@ import { Enemy } from './Enemy';
 import { Projectile } from '../Projectile';
 import { Vector2 } from '../../utils/Vector2';
 import { ENEMY, COLORS } from '../../utils/constants';
+import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
 
 export class Spitter extends Enemy {
@@ -51,14 +52,15 @@ export class Spitter extends Enemy {
 
   private shoot(): void {
     const dirToPlayer = this.getDirectionToPlayer();
-    
+    AudioManager.play('SFX_ENEMY_SPIT', 0.48);
     const projectile = new Projectile({
       position: this.position.clone(),
       direction: dirToPlayer,
       isPlayerProjectile: false,
       damage: this.damage,
+      playerHitKind: 'projectile',
     });
-    
+
     this.game.spawnProjectile(projectile);
   }
 

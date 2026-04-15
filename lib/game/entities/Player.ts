@@ -1,5 +1,5 @@
 import { Entity } from './Entity';
-import { Projectile } from './Projectile';
+import { Projectile, type PlayerHurtKind } from './Projectile';
 import { Vector2 } from '../utils/Vector2';
 import { PLAYER, COLORS, COLLISION_LAYER, GAME, PROJECTILE } from '../utils/constants';
 import { resolveCircleObstacles } from '../utils/obstacleCollision';
@@ -40,6 +40,19 @@ export class Player extends Entity {
   /** Speed multiplier while at exactly 1 HP. */
   public lastLegSpeedMult: number = 1;
 
+  /** Unlocks after clearing sector 2 (see `Game.unlockDash`). */
+  public dashUnlocked = false;
+  public dashStamina = 0;
+  public dashStaminaMax: number = PLAYER.DASH_STAMINA_MAX_BASE;
+  /** Multiplier on `DASH_REGEN_PER_SEC` (upgrades). */
+  public dashRegenMult = 1;
+  private dashCooldown = 0;
+  private dashBurstRemaining = 0;
+  private dashDir = new Vector2(1, 0);
+
+  /** Webs / hazards; 1 = normal. Reset each frame before enemies (see `Game.update`). */
+  public environmentMoveMult = 1;
+
   private game: Game;
   private fireCooldown: number = 0;
   private invulnerableTime: number = 0;
@@ -66,31 +79,75 @@ export class Player extends Entity {
     this.speed = PLAYER.SPEED;
     this.fireRate = PLAYER.FIRE_RATE;
     this.damage = PLAYER.DAMAGE;
+    this.dashStamina = PLAYER.DASH_STAMINA_MAX_BASE;
+  }
+
+  resetEnvironmentMoveMult(): void {
+    this.environmentMoveMult = 1;
+  }
+
+  applyEnvironmentSlow(allowedMult: number): void {
+    this.environmentMoveMult = Math.min(this.environmentMoveMult, allowedMult);
   }
 
   update(deltaTime: number): void {
     const input = this.game.input;
-    
-    // Movement
-    const moveDir = input.getMovementDirection();
-    if (moveDir.magnitudeSq() > 0) {
-      let moveSpeed = this.speed;
-      const hpFrac = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
-      if (hpFrac <= 0.5 && this.lowHpSpeedMult > 1) moveSpeed *= this.lowHpSpeedMult;
-      if (this.health === 1 && this.lastLegSpeedMult > 1) moveSpeed *= this.lastLegSpeedMult;
-      this.velocity = moveDir.mul(moveSpeed);
-      
-      // Animate legs only on intentional input; clamp so feet cannot drift apart visually
-      this.legOffset += deltaTime * 15 * this.legDirection;
-      if (Math.abs(this.legOffset) > 2) {
-        this.legDirection *= -1;
-      }
-    } else {
-      // Slow down
-      this.velocity.mulMut(1 - PLAYER.FRICTION * deltaTime);
-      this.legOffset *= 0.85;
+
+    this.dashCooldown = Math.max(0, this.dashCooldown - deltaTime);
+    if (this.dashUnlocked) {
+      this.dashStamina = Math.min(
+        this.dashStaminaMax,
+        this.dashStamina + PLAYER.DASH_REGEN_PER_SEC * this.dashRegenMult * deltaTime
+      );
     }
-    this.legOffset = Math.max(-2, Math.min(2, this.legOffset));
+
+    if (this.dashBurstRemaining > 0) {
+      this.dashBurstRemaining -= deltaTime;
+      this.velocity = this.dashDir.mul(this.speed * PLAYER.DASH_SPEED_MULT);
+      this.legOffset += deltaTime * 22 * this.legDirection;
+      if (Math.abs(this.legOffset) > 2) this.legDirection *= -1;
+      this.legOffset = Math.max(-2, Math.min(2, this.legOffset));
+    } else {
+      const tryDash =
+        this.dashUnlocked &&
+        input.isKeyJustPressed('shift') &&
+        this.dashStamina >= PLAYER.DASH_STAMINA_COST &&
+        this.dashCooldown <= 0;
+
+      if (tryDash) {
+        const moveDir = input.getMovementDirection();
+        const aim = this.game.getAimMousePosition().sub(this.position);
+        const aimDir = aim.magnitudeSq() > 4 ? aim.normalize() : new Vector2(1, 0);
+        this.dashDir = moveDir.magnitudeSq() > 0.01 ? moveDir.clone() : aimDir;
+        this.dashStamina -= PLAYER.DASH_STAMINA_COST;
+        this.dashCooldown = PLAYER.DASH_COOLDOWN_SEC;
+        this.dashBurstRemaining = PLAYER.DASH_BURST_SEC;
+        AudioManager.play('SFX_DASH', 0.55);
+      }
+
+      // Movement
+      const moveDir = input.getMovementDirection();
+      if (moveDir.magnitudeSq() > 0) {
+        let moveSpeed = this.speed;
+        const hpFrac = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+        if (hpFrac <= 0.5 && this.lowHpSpeedMult > 1) moveSpeed *= this.lowHpSpeedMult;
+        if (this.health === 1 && this.lastLegSpeedMult > 1) moveSpeed *= this.lastLegSpeedMult;
+        moveSpeed *= this.environmentMoveMult;
+        this.velocity = moveDir.mul(moveSpeed);
+
+        this.legOffset += deltaTime * 15 * this.legDirection;
+        if (Math.abs(this.legOffset) > 2) {
+          this.legDirection *= -1;
+        }
+      } else {
+        this.velocity.mulMut(1 - PLAYER.FRICTION * deltaTime);
+        if (this.environmentMoveMult < 1) {
+          this.velocity.mulMut(0.82 + 0.18 * this.environmentMoveMult);
+        }
+        this.legOffset *= 0.85;
+      }
+      this.legOffset = Math.max(-2, Math.min(2, this.legOffset));
+    }
     
     // Apply velocity
     this.position.addMut(this.velocity.mul(deltaTime));
@@ -189,7 +246,7 @@ export class Player extends Entity {
     }
   }
 
-  takeDamage(amount: number): void {
+  takeDamage(amount: number, opts?: { hitKind?: PlayerHurtKind }): void {
     if (this.spawnProtectionTime > 0) return;
     if (this.isInvulnerable) return;
 
@@ -201,8 +258,8 @@ export class Player extends Entity {
       0.35,
       PLAYER.INVULN_TIME + this.hitInvulnBonus
     );
-    
-    AudioManager.play('SFX_PLAYER_HURT');
+
+    AudioManager.playPlayerHurt(opts?.hitKind ?? 'melee');
     this.game.shake(11);
     this.game.particles.emit(this.position, '#ff6666', 8, 60);
     this.game.notifyHealthChange();
@@ -281,6 +338,7 @@ export class Player extends Entity {
   setPosition(pos: Vector2): void {
     this.position = pos.clone();
     this.velocity.set(0, 0);
+    this.dashBurstRemaining = 0;
     this.legOffset = 0;
     this.legDirection = 1;
   }

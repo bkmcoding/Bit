@@ -22,6 +22,16 @@ export const PLAYER = {
   INVULN_TIME: 1.0, // seconds of invincibility after hit
   ACCELERATION: 400, // how fast player reaches max speed
   FRICTION: 10, // how fast player slows down
+  /** Shift-dash burst (seconds); full invuln for this window. */
+  DASH_BURST_SEC: 0.11,
+  DASH_SPEED_MULT: 3.05,
+  /** Stamina units per dash (integer-ish pool). */
+  DASH_STAMINA_COST: 1,
+  DASH_STAMINA_MAX_BASE: 1,
+  DASH_REGEN_PER_SEC: 0.2,
+  DASH_COOLDOWN_SEC: 0.44,
+  /** Max stamina from upgrades (base + upgrades). */
+  DASH_STAMINA_CAP: 4,
 } as const;
 
 /** Selected from main menu; scales enemies, player fire cadence, and spawn safety. */
@@ -40,6 +50,9 @@ export const DIFFICULTY_SETTINGS: Record<
     bossHealthMult: number;
     /** Extra multiplier on Broodmother damage (stacks with enemyDamageMult). */
     bossDamageMult: number;
+    /** Chapter 1 Broodmother (sector 12) only — stacks on boss mult; lower = easier. */
+    chapter1BroodHealthFactor: number;
+    chapter1BroodDamageFactor: number;
     /** Multiplies seconds-between-shots; lower = faster shooting for the player. */
     playerFireRateMult: number;
     spawnProtectionSec: number;
@@ -51,6 +64,8 @@ export const DIFFICULTY_SETTINGS: Record<
     enemySpeedMult: 1,
     bossHealthMult: 0.72,
     bossDamageMult: 0.8,
+    chapter1BroodHealthFactor: 0.5,
+    chapter1BroodDamageFactor: 0.72,
     playerFireRateMult: 0.88,
     spawnProtectionSec: 3.0,
   },
@@ -60,6 +75,8 @@ export const DIFFICULTY_SETTINGS: Record<
     enemySpeedMult: 1,
     bossHealthMult: 1,
     bossDamageMult: 1,
+    chapter1BroodHealthFactor: 0.78,
+    chapter1BroodDamageFactor: 0.9,
     playerFireRateMult: 1,
     spawnProtectionSec: 2.45,
   },
@@ -69,6 +86,8 @@ export const DIFFICULTY_SETTINGS: Record<
     enemySpeedMult: 1.09,
     bossHealthMult: 1.42,
     bossDamageMult: 1.18,
+    chapter1BroodHealthFactor: 1,
+    chapter1BroodDamageFactor: 1.06,
     playerFireRateMult: 1.12,
     spawnProtectionSec: 1.85,
   },
@@ -161,10 +180,66 @@ export const ENEMY = {
     burstCooldown: 2.65,
     projectileSpeed: 76,
   },
+  TOXIC_SPITTER: {
+    size: 12,
+    speed: 23,
+    health: 12,
+    damage: 1,
+    range: 108,
+    fireRate: 1.45,
+    preferredDistance: 66,
+  },
+  TIDECRAWLER: {
+    size: 9,
+    speed: 34,
+    burstSpeed: 128,
+    health: 10,
+    damage: 1,
+    chaseRange: 135,
+    surgeCooldown: 2.2,
+    surgeDuration: 0.32,
+  },
+  /** Fast shoreline skirmisher — chapter 2. */
+  GILL_STALKER: {
+    size: 8,
+    speed: 32,
+    dashSpeed: 138,
+    health: 8,
+    damage: 1,
+    chargeTime: 1.35,
+    dashDuration: 0.26,
+  },
+  /** Glassy minnow pack — chapter 2. */
+  MURK_LEECH: {
+    size: 7,
+    speed: 58,
+    health: 5,
+    damage: 1,
+    chaseRange: 128,
+  },
+  /** Shore crab — chapter 2 skirmisher. */
+  BRINE_SCUTTLER: {
+    size: 10,
+    speed: 29,
+    health: 11,
+    damage: 1,
+    chaseRange: 118,
+    surgeCooldown: 2.35,
+    surgeDuration: 0.24,
+    burstSpeed: 118,
+  },
   BROODMOTHER: {
     size: 32,
     speed: 22,
     health: 280,
+    damage: 2,
+    spawnCooldown: 4.0,
+  },
+  /** Flooded abyss finale (chapter 2). */
+  TRENCH_MATRIARCH: {
+    size: 28,
+    speed: 21,
+    health: 300,
     damage: 2,
     spawnCooldown: 4.0,
   },
@@ -182,7 +257,14 @@ export const ROOM = {
 /** Minimum spawn shield on any combat room entry (seconds); difficulty can add more on top. */
 export const SPAWN_PROTECTION_MIN_SEC = 2.85;
 
-export type RoomThemeId = 'cellar' | 'moss' | 'ash' | 'deep' | 'rust';
+export type RoomThemeId =
+  | 'cellar'
+  | 'moss'
+  | 'ash'
+  | 'deep'
+  | 'rust'
+  | 'flooded'
+  | 'toxicworks';
 
 export const ROOM_THEME_PALETTES: Record<
   RoomThemeId,
@@ -235,6 +317,22 @@ export const ROOM_THEME_PALETTES: Record<
     obstacle: '#442c20',
     obstacleTop: '#5a3828',
   },
+  flooded: {
+    floor: '#11242b',
+    floorAccent: '#1a3640',
+    wall: '#1d3c46',
+    wallDark: '#08161a',
+    obstacle: '#204650',
+    obstacleTop: '#2d5b66',
+  },
+  toxicworks: {
+    floor: '#1f2a1a',
+    floorAccent: '#2b3a22',
+    wall: '#3a4d28',
+    wallDark: '#12190d',
+    obstacle: '#3a4f2a',
+    obstacleTop: '#4f6a38',
+  },
 };
 
 // Colors (limited palette for pixel art look)
@@ -270,6 +368,21 @@ export const COLORS = {
   WIDOW_ABDOMEN: '#2a1040',
   WIDOW_LEGS: '#0d0514',
   WIDOW_EYES: '#cc00ff',
+  TOXIC_SPITTER_BODY: '#2e5f2d',
+  TOXIC_SPITTER_GLAND: '#8adf41',
+  TIDECRAWLER_BODY: '#1f5260',
+  TIDECRAWLER_ABDOMEN: '#2d7a8f',
+  TIDECRAWLER_EYES: '#9af0ff',
+  GILL_STALKER_BODY: '#2a6b75',
+  MURK_LEECH_BODY: '#3d3048',
+  MURK_LEECH_EYES: '#66ffcc',
+  BRINE_SCUTTLER_SHELL: '#3d5a62',
+  BRINE_SCUTTLER_CARAPACE: '#2a6f78',
+  BRINE_SCUTTLER_LEGS: '#1a3038',
+  BRINE_SCUTTLER_EYE: '#ffeed0',
+  TRENCH_MATRIARCH_CORE: '#1a4a52',
+  TRENCH_MATRIARCH_MANTLE: '#0f3540',
+  TRENCH_MATRIARCH_EYE: '#6af0ff',
   
   // Projectiles
   PLAYER_BULLET: '#5a3038',
@@ -301,7 +414,14 @@ export const COLLISION_LAYER = {
 } as const;
 
 // Game states
-export type GameState = 'MENU' | 'PLAYING' | 'PAUSED' | 'UPGRADE' | 'GAME_OVER' | 'VICTORY';
+export type GameState =
+  | 'MENU'
+  | 'PLAYING'
+  | 'PAUSED'
+  | 'UPGRADE'
+  | 'CHAPTER_MAP'
+  | 'GAME_OVER'
+  | 'VICTORY';
 
 // Direction enum
 export type Direction = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST';

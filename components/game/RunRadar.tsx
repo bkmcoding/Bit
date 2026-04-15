@@ -42,6 +42,20 @@ const RADAR_THEME: Record<
     blipDim: 'rgba(90, 50, 35, 0.34)',
     ring: 'rgba(255, 160, 100, 0.52)',
   },
+  flooded: {
+    grid: 'rgba(70, 130, 150, 0.22)',
+    edge: 'rgba(90, 168, 190, 0.36)',
+    blip: 'rgba(130, 220, 245, 0.78)',
+    blipDim: 'rgba(45, 78, 88, 0.34)',
+    ring: 'rgba(150, 235, 255, 0.5)',
+  },
+  toxicworks: {
+    grid: 'rgba(95, 130, 62, 0.22)',
+    edge: 'rgba(145, 182, 78, 0.36)',
+    blip: 'rgba(190, 235, 118, 0.8)',
+    blipDim: 'rgba(62, 82, 40, 0.35)',
+    ring: 'rgba(214, 250, 130, 0.54)',
+  },
 };
 
 function layoutBounds(minimap: MinimapLayout): {

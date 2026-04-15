@@ -11,14 +11,18 @@
  */
 
 import { ATMOSPHERE_AUDIO_SETTINGS } from '../settings/atmosphere-audio';
+import type { PlayerHurtKind } from '../entities/Projectile';
 
-export type MusicTrack = 'MUSIC_MENU' | 'MUSIC_GAME' | 'MUSIC_BOSS';
+export type MusicTrack = 'MUSIC_MENU' | 'MUSIC_GAME' | 'MUSIC_BOSS' | 'MUSIC_WATER';
 
 /** Paths tried in order: GAME_CONTEXT names first, then public/audio/README.txt names. */
 export const MUSIC_SEARCH_PATHS: Record<MusicTrack, readonly string[]> = {
   MUSIC_MENU: ['/audio/music_menu.mp3', '/audio/menu-music.mp3'],
-  MUSIC_GAME: ['/audio/music_gameplay.mp3', '/audio/game-music.mp3'],
-  MUSIC_BOSS: ['/audio/music_boss.mp3', '/audio/boss-music.mp3'],
+  /** README names `game-music.mp3` first — try it before legacy `music_gameplay.mp3`. */
+  MUSIC_GAME: ['/audio/game-music.mp3', '/audio/music_gameplay.mp3'],
+  MUSIC_BOSS: ['/audio/boss-music.mp3', '/audio/music_boss.mp3'],
+  /** Chapter 2 (flooded arc). Add `public/audio/water-music.mp3` (or `chapter2-music.mp3`). */
+  MUSIC_WATER: ['/audio/water-music.mp3', '/audio/chapter2-music.mp3', '/audio/music_water.mp3'],
 };
 
 /**
@@ -50,11 +54,16 @@ export const AUDIO_PATHS = {
   MUSIC_MENU: MUSIC_SEARCH_PATHS.MUSIC_MENU[0],
   MUSIC_GAME: MUSIC_SEARCH_PATHS.MUSIC_GAME[0],
   MUSIC_BOSS: MUSIC_SEARCH_PATHS.MUSIC_BOSS[0],
+  MUSIC_WATER: MUSIC_SEARCH_PATHS.MUSIC_WATER[0],
 
   // Sound effects
   SFX_SHOOT: '/audio/sfx/shoot.mp3',
   SFX_HIT: '/audio/sfx/hit.mp3',
   SFX_ENEMY_HIT: '/audio/sfx/enemy-hit.mp3',
+  /** Enemy glob / venom shot telegraph (optional MP3). */
+  SFX_ENEMY_SPIT: '/audio/sfx/enemy-spit.mp3',
+  /** Narrow venom needle (optional MP3). */
+  SFX_ENEMY_NEEDLE: '/audio/sfx/enemy-needle.mp3',
   SFX_ENEMY_DEATH: '/audio/sfx/enemy-death.mp3',
   SFX_PLAYER_HURT: '/audio/sfx/player-hurt.mp3',
   SFX_DOOR_OPEN: '/audio/sfx/door-open.mp3',
@@ -89,13 +98,24 @@ export interface AudioSettings {
 const DEFAULT_SETTINGS: AudioSettings = {
   masterVolume: 0.7,
   musicVolume: 0.5,
-  sfxVolume: 0.8,
+  /** Slightly higher default so horror SFX (often synth) sit closer to music. */
+  sfxVolume: 0.88,
   muted: false,
   ambienceWhiteNoiseVolume: ATMOSPHERE_AUDIO_SETTINGS.whiteNoiseVolume,
   ambienceCaveVolume: ATMOSPHERE_AUDIO_SETTINGS.caveVolume,
   enemySkitterEnabled: ATMOSPHERE_AUDIO_SETTINGS.enemySkitterEnabled,
   enemySkitterVolume: ATMOSPHERE_AUDIO_SETTINGS.enemySkitterVolume,
 };
+
+/**
+ * Base scale for Web Audio SFX fallbacks (legacy was `0.3`). Dark / low-heavy synths still
+ * sound quiet vs full-range music — `SFX_SYNTH_PERCEIVED_BOOST` compensates for that.
+ */
+const SFX_SYNTH_LEVEL = 0.72;
+/** Extra lift so SFX cut through music perceptually (low energy = quieter at same meter). */
+const SFX_SYNTH_PERCEIVED_BOOST = 1.32;
+/** Lift decoded one-shots (shoot, hits, etc.) toward gameplay music loudness. */
+const SFX_BUFFER_LEVEL = 1.48;
 
 /** Only these are read/written to localStorage (atmosphere comes from source file). */
 const PERSISTED_AUDIO_KEYS = ['masterVolume', 'musicVolume', 'sfxVolume', 'muted'] as const;
@@ -144,8 +164,11 @@ class AudioManagerClass {
   private menuTvStaticStopTimer: ReturnType<typeof setTimeout> | null = null;
   /** Quiet AC / flyback-style buzz under menu (stays with music until gameplay). */
   private menuTvBuzz: { gain: GainNode; oscillators: OscillatorNode[] } | null = null;
-  /** Next MUSIC_GAME / MUSIC_BOSS Web Audio gain ramps from 0 (after leaving main menu). */
+  /** Next MUSIC_GAME / MUSIC_BOSS / MUSIC_WATER Web Audio gain ramps from 0 (after leaving main menu). */
   private pendingGameplayMusicFadeInMs: number | null = null;
+  /** Fluorescent-style buzz + occasional flicker during chapter 2 (non-boss). */
+  private fluorescentHum: { gain: GainNode; oscillators: OscillatorNode[] } | null = null;
+  private fluorescentRaf: number | null = null;
 
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
@@ -232,6 +255,19 @@ class AudioManagerClass {
         // File doesn't exist, will use fallback
       }
     }
+
+    for (const path of [
+      ...MUSIC_SEARCH_PATHS.MUSIC_MENU,
+      ...MUSIC_SEARCH_PATHS.MUSIC_GAME,
+      ...MUSIC_SEARCH_PATHS.MUSIC_BOSS,
+      ...MUSIC_SEARCH_PATHS.MUSIC_WATER,
+    ]) {
+      try {
+        await this.loadSound(path);
+      } catch {
+        // optional music file
+      }
+    }
   }
 
   private async loadSound(path: string): Promise<AudioBuffer | null> {
@@ -267,6 +303,17 @@ class AudioManagerClass {
     if (this.settings.muted || !this.isInitialized) return;
     this.ensureAudioContextRunning();
 
+    if (effect === 'SFX_ENEMY_HIT') {
+      const v =
+        volume *
+        this.settings.sfxVolume *
+        this.settings.masterVolume *
+        SFX_BUFFER_LEVEL *
+        1.08;
+      this.playEnemyHitGooey(v);
+      return;
+    }
+
     const path = AUDIO_PATHS[effect];
     let buffer = this.sounds.get(path);
     if (!buffer && effect === 'SFX_DOOR_PASS') {
@@ -274,20 +321,88 @@ class AudioManagerClass {
     }
 
     if (buffer && this.audioContext) {
-      this.playBuffer(buffer, volume * this.settings.sfxVolume * this.settings.masterVolume);
+      this.playBuffer(
+        buffer,
+        volume * this.settings.sfxVolume * this.settings.masterVolume * SFX_BUFFER_LEVEL,
+        1
+      );
     } else {
       // Use oscillator fallback
       this.playFallbackSound(effect, volume);
     }
   }
 
-  private playBuffer(buffer: AudioBuffer, volume: number): void {
+  /**
+   * Player hurt sting — varies by damage source. Uses `player-hurt` MP3 with playbackRate when
+   * present; otherwise Web Audio fallbacks tuned per kind.
+   */
+  playPlayerHurt(kind: PlayerHurtKind = 'melee'): void {
+    if (this.settings.muted || !this.isInitialized) return;
+    this.ensureAudioContextRunning();
+    const base = this.settings.sfxVolume * this.settings.masterVolume;
+    const buffer = this.sounds.get(AUDIO_PATHS.SFX_PLAYER_HURT);
+    if (buffer && this.audioContext) {
+      const rate =
+        kind === 'projectile'
+          ? 1.14
+          : kind === 'acid'
+            ? 0.74
+            : kind === 'needle'
+              ? 1.36
+              : kind === 'boss'
+                ? 0.84
+                : kind === 'charge'
+                  ? 0.68
+                  : 1.02;
+      this.playBuffer(buffer, base * 1.05 * SFX_BUFFER_LEVEL, rate);
+      return;
+    }
+    this.playPlayerHurtFallback(kind, base * 0.42);
+  }
+
+  /**
+   * Short low pulse for the main-menu standby LED. Stays subtle; Web Audio may stay silent until
+   * a user gesture unlocks the AudioContext (same as other SFX).
+   */
+  playMenuStandbyPulse(): void {
+    if (this.settings.muted || !this.isInitialized || !this.audioContext) return;
+    this.ensureAudioContextRunning();
+
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const peak = Math.max(0.06, this.settings.sfxVolume * this.settings.masterVolume * 0.14);
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(88, now);
+    osc.frequency.exponentialRampToValueAtTime(64, now + 0.054);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(peak, now + 0.0035);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.058);
+
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(420, now);
+    lp.Q.setValueAtTime(0.7, now);
+
+    osc.connect(lp);
+    lp.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.065);
+  }
+
+  private playBuffer(buffer: AudioBuffer, volume: number, playbackRate = 1): void {
     if (!this.audioContext) return;
     
     const source = this.audioContext.createBufferSource();
     const gainNode = this.audioContext.createGain();
     
     source.buffer = buffer;
+    source.playbackRate.value = playbackRate;
     gainNode.gain.value = volume;
     
     source.connect(gainNode);
@@ -296,13 +411,545 @@ class AudioManagerClass {
     source.start(0);
   }
 
+  /**
+   * Enemy damaged — always synthesized. Horror / bug-splat: low thump, mud-filtered burst,
+   * tiny chitin crack — no bright sweeps (reads as “laser”). Ignores `enemy-hit.mp3`.
+   */
+  private playEnemyHitGooey(linearGain: number): void {
+    if (!this.audioContext || this.settings.muted) return;
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = linearGain * 1.45;
+
+    const merge = ctx.createGain();
+    merge.gain.value = 1;
+
+    // --- Body / viscera thump (weight)
+    const thump = ctx.createOscillator();
+    const thG = ctx.createGain();
+    thump.type = 'sine';
+    thump.frequency.setValueAtTime(62 + Math.random() * 10, now);
+    thump.frequency.exponentialRampToValueAtTime(38, now + 0.1);
+    thG.gain.setValueAtTime(0.0001, now);
+    thG.gain.linearRampToValueAtTime(v * 0.72, now + 0.016);
+    thG.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    thump.connect(thG);
+    thG.connect(merge);
+    thump.start(now);
+    thump.stop(now + 0.24);
+
+    // --- Wet squelch (low triangle, heavily damped — not a zippy tone)
+    const glop = ctx.createOscillator();
+    const gG = ctx.createGain();
+    glop.type = 'triangle';
+    glop.frequency.setValueAtTime(105 + Math.random() * 18, now);
+    glop.frequency.exponentialRampToValueAtTime(58, now + 0.072);
+    gG.gain.setValueAtTime(0.0001, now);
+    gG.gain.linearRampToValueAtTime(v * 0.32, now + 0.008);
+    gG.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+    glop.connect(gG);
+    const gLp = ctx.createBiquadFilter();
+    gLp.type = 'lowpass';
+    gLp.frequency.setValueAtTime(420, now);
+    gG.connect(gLp);
+    gLp.connect(merge);
+    glop.start(now);
+    glop.stop(now + 0.14);
+
+    // --- Brown-ish mud splat (chunky steps, slow decay — horror texture)
+    const len = Math.floor(ctx.sampleRate * 0.11);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    const steps = 14;
+    let brown = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env =
+        Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.65)), 0.75) * Math.exp(-2.05 * t);
+      brown += (Math.random() * 2 - 1) * 0.085;
+      brown *= 0.965;
+      let x = brown * env + (Math.random() * 2 - 1) * env * 0.35;
+      x = Math.round(x * steps) / steps;
+      ch[i] = x;
+    }
+
+    const mud = ctx.createBufferSource();
+    mud.buffer = buf;
+    const mG = ctx.createGain();
+    mG.gain.setValueAtTime(0.0001, now);
+    mG.gain.linearRampToValueAtTime(v * 0.46, now + 0.011);
+    mG.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    const mLp = ctx.createBiquadFilter();
+    mLp.type = 'lowpass';
+    mLp.frequency.setValueAtTime(320, now);
+    mLp.Q.setValueAtTime(0.85, now);
+    mud.connect(mG);
+    mG.connect(mLp);
+    mLp.connect(merge);
+    mud.start(now);
+    mud.stop(now + 0.17);
+
+    // --- Single chitin crack (ms-scale bandpass — not a sustained high beam)
+    const crack = ctx.createOscillator();
+    const cG = ctx.createGain();
+    crack.type = 'triangle';
+    crack.frequency.setValueAtTime(195, now);
+    crack.frequency.exponentialRampToValueAtTime(125, now + 0.018);
+    cG.gain.setValueAtTime(0.0001, now);
+    cG.gain.linearRampToValueAtTime(v * 0.078, now + 0.0014);
+    cG.gain.exponentialRampToValueAtTime(0.0001, now + 0.032);
+    crack.connect(cG);
+    const bpf = ctx.createBiquadFilter();
+    bpf.type = 'bandpass';
+    bpf.frequency.setValueAtTime(640 + Math.random() * 100, now);
+    bpf.Q.setValueAtTime(2.1, now);
+    cG.connect(bpf);
+    bpf.connect(merge);
+    crack.start(now);
+    crack.stop(now + 0.04);
+
+    // --- Body + air: lowpass mud, then mid “click” presence so hits read vs music (not only sub).
+    const masterLp = ctx.createBiquadFilter();
+    masterLp.type = 'lowpass';
+    masterLp.frequency.setValueAtTime(2400, now);
+    masterLp.frequency.exponentialRampToValueAtTime(520, now + 0.09);
+    masterLp.Q.setValueAtTime(0.65, now);
+
+    const presence = ctx.createBiquadFilter();
+    presence.type = 'peaking';
+    presence.frequency.setValueAtTime(520, now);
+    presence.Q.setValueAtTime(0.85, now);
+    presence.gain.setValueAtTime(6.5, now);
+
+    const hs = ctx.createBiquadFilter();
+    hs.type = 'highshelf';
+    hs.frequency.setValueAtTime(2800, now);
+    hs.gain.setValueAtTime(-5, now);
+
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(1.28, now);
+    merge.connect(masterLp);
+    masterLp.connect(presence);
+    presence.connect(hs);
+    hs.connect(out);
+    out.connect(ctx.destination);
+  }
+
+  private playPlayerHurtFallback(kind: PlayerHurtKind, vol: number): void {
+    if (!this.audioContext || this.settings.muted) return;
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = vol * 1.2;
+
+    const merge = ctx.createGain();
+    merge.gain.value = 1;
+
+    const base =
+      kind === 'acid'
+        ? 118
+        : kind === 'needle'
+          ? 280
+          : kind === 'boss'
+            ? 95
+            : kind === 'charge'
+              ? 72
+              : kind === 'projectile'
+                ? 195
+                : 155;
+    const end =
+      kind === 'acid'
+        ? 62
+        : kind === 'needle'
+          ? 420
+          : kind === 'boss'
+            ? 48
+            : kind === 'charge'
+              ? 38
+              : kind === 'projectile'
+                ? 340
+                : 210;
+
+    const body = ctx.createOscillator();
+    const bGain = ctx.createGain();
+    body.type = 'triangle';
+    body.frequency.setValueAtTime(base, now);
+    body.frequency.exponentialRampToValueAtTime(Math.max(36, end * 0.35), now + 0.14);
+    bGain.gain.setValueAtTime(v * (kind === 'charge' ? 0.85 : 0.55), now);
+    bGain.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
+    body.connect(bGain);
+    bGain.connect(merge);
+
+    const tick = ctx.createOscillator();
+    const tGain = ctx.createGain();
+    tick.type = 'triangle';
+    tick.frequency.setValueAtTime(380 + Math.random() * 90, now);
+    tick.frequency.exponentialRampToValueAtTime(120, now + 0.055);
+    tGain.gain.setValueAtTime(v * 0.1, now);
+    tGain.gain.exponentialRampToValueAtTime(0.008, now + 0.08);
+    tick.connect(tGain);
+    tGain.connect(merge);
+
+    const pf = ctx.createBiquadFilter();
+    pf.type = 'lowpass';
+    pf.frequency.setValueAtTime(2400, now);
+    pf.Q.setValueAtTime(0.65, now);
+    merge.connect(pf);
+    pf.connect(ctx.destination);
+    body.start(now);
+    body.stop(now + 0.24);
+    tick.start(now);
+    tick.stop(now + 0.09);
+  }
+
+  /**
+   * Gun fallback: pressure + tunnel tone — smoother than 8-bit crush; longer, darker tail for
+   * suspense (not arcade “pew”).
+   */
+  private playOrbShootFallback(vol: number): void {
+    if (!this.audioContext || this.settings.muted) return;
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = vol * 2.15;
+
+    const merge = ctx.createGain();
+    merge.gain.value = 1;
+
+    const len = Math.floor(ctx.sampleRate * 0.1);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = Math.pow(Math.sin(Math.PI * t), 0.85) * Math.exp(-2.35 * t);
+      let x = (Math.random() * 2 - 1) * env;
+      x = Math.tanh(x * 1.65) * 0.78;
+      ch[i] = i ? ch[i - 1] * 0.42 + x * 0.58 : x;
+    }
+
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = buf;
+    const nGain = ctx.createGain();
+    nGain.gain.setValueAtTime(0.0001, now);
+    nGain.gain.linearRampToValueAtTime(v * 0.58, now + 0.006);
+    nGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    const nLp = ctx.createBiquadFilter();
+    nLp.type = 'lowpass';
+    nLp.frequency.setValueAtTime(2800, now);
+    nLp.frequency.exponentialRampToValueAtTime(900, now + 0.07);
+    noiseSrc.connect(nGain);
+    nGain.connect(nLp);
+    nLp.connect(merge);
+
+    const tunnel = ctx.createOscillator();
+    const tGain = ctx.createGain();
+    tunnel.type = 'sine';
+    tunnel.frequency.setValueAtTime(108 + Math.random() * 10, now);
+    tunnel.frequency.exponentialRampToValueAtTime(66, now + 0.09);
+    tGain.gain.setValueAtTime(0.0001, now);
+    tGain.gain.linearRampToValueAtTime(v * 0.22, now + 0.012);
+    tGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+    tunnel.connect(tGain);
+    tGain.connect(merge);
+
+    const plorp = ctx.createOscillator();
+    const plGain = ctx.createGain();
+    plorp.type = 'sine';
+    plorp.frequency.setValueAtTime(172 + Math.random() * 14, now);
+    plorp.frequency.exponentialRampToValueAtTime(108, now + 0.07);
+    plGain.gain.setValueAtTime(0.0001, now);
+    plGain.gain.linearRampToValueAtTime(v * 0.48, now + 0.005);
+    plGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+    plorp.connect(plGain);
+    plGain.connect(merge);
+
+    const squelch = ctx.createOscillator();
+    const sqGain = ctx.createGain();
+    squelch.type = 'triangle';
+    squelch.frequency.setValueAtTime(218 + Math.random() * 20, now);
+    squelch.frequency.exponentialRampToValueAtTime(142, now + 0.055);
+    sqGain.gain.setValueAtTime(0.0001, now);
+    sqGain.gain.linearRampToValueAtTime(v * 0.24, now + 0.004);
+    sqGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+    squelch.connect(sqGain);
+    sqGain.connect(merge);
+
+    const sub = ctx.createOscillator();
+    const sGain = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(78, now);
+    sub.frequency.exponentialRampToValueAtTime(52, now + 0.09);
+    sGain.gain.setValueAtTime(0.0001, now);
+    sGain.gain.linearRampToValueAtTime(v * 0.38, now + 0.014);
+    sGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    sub.connect(sGain);
+    sGain.connect(merge);
+
+    const peak = ctx.createBiquadFilter();
+    peak.type = 'peaking';
+    peak.frequency.setValueAtTime(380, now);
+    peak.Q.setValueAtTime(0.75, now);
+    peak.gain.setValueAtTime(3.5, now);
+
+    const shelf = ctx.createBiquadFilter();
+    shelf.type = 'lowshelf';
+    shelf.frequency.setValueAtTime(140, now);
+    shelf.gain.setValueAtTime(4.5, now);
+
+    const presence = ctx.createBiquadFilter();
+    presence.type = 'peaking';
+    presence.frequency.setValueAtTime(410, now);
+    presence.Q.setValueAtTime(0.9, now);
+    presence.gain.setValueAtTime(5.2, now);
+
+    const masterLp = ctx.createBiquadFilter();
+    masterLp.type = 'lowpass';
+    masterLp.frequency.setValueAtTime(6800, now);
+    masterLp.Q.setValueAtTime(0.7, now);
+
+    const dry = ctx.createGain();
+    const wet = ctx.createGain();
+    const dly = ctx.createDelay(0.12);
+    dly.delayTime.setValueAtTime(0.042, now);
+    const fb = ctx.createGain();
+    fb.gain.value = 0.22;
+    dly.connect(fb);
+    fb.connect(dly);
+
+    merge.connect(peak);
+    peak.connect(shelf);
+    shelf.connect(masterLp);
+    masterLp.connect(dry);
+    masterLp.connect(dly);
+    dry.connect(ctx.destination);
+    dly.connect(wet);
+    wet.connect(ctx.destination);
+
+    dry.gain.setValueAtTime(0.88, now);
+    wet.gain.setValueAtTime(0.22, now);
+
+    noiseSrc.start(now);
+    noiseSrc.stop(now + 0.12);
+    tunnel.start(now);
+    tunnel.stop(now + 0.15);
+    plorp.start(now);
+    plorp.stop(now + 0.12);
+    squelch.start(now);
+    squelch.stop(now + 0.1);
+    sub.start(now);
+    sub.stop(now + 0.17);
+  }
+
+  /** Enemy killed — long low crumble + pressure drop (not a cheerful arcade slide). */
+  private playEnemyDeathHorror(vol: number): void {
+    if (!this.audioContext || this.settings.muted) return;
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = vol * 1.62;
+
+    const merge = ctx.createGain();
+    merge.gain.value = 1;
+
+    const len = Math.floor(ctx.sampleRate * 0.42);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    let carry = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = Math.pow(1 - t, 1.4) * Math.exp(-1.1 * t);
+      carry += (Math.random() * 2 - 1) * 0.06;
+      carry *= 0.988;
+      const x = Math.tanh((carry + (Math.random() * 2 - 1) * 0.45) * env);
+      ch[i] = x * 0.55;
+    }
+
+    const crumble = ctx.createBufferSource();
+    crumble.buffer = buf;
+    const cG = ctx.createGain();
+    cG.gain.setValueAtTime(0.0001, now);
+    cG.gain.linearRampToValueAtTime(v * 0.42, now + 0.04);
+    cG.gain.exponentialRampToValueAtTime(0.0001, now + 0.48);
+    const cLp = ctx.createBiquadFilter();
+    cLp.type = 'lowpass';
+    cLp.frequency.setValueAtTime(1100, now);
+    cLp.frequency.exponentialRampToValueAtTime(180, now + 0.35);
+    crumble.connect(cG);
+    cG.connect(cLp);
+    cLp.connect(merge);
+
+    const body = ctx.createOscillator();
+    const bG = ctx.createGain();
+    body.type = 'triangle';
+    body.frequency.setValueAtTime(155 + Math.random() * 22, now);
+    body.frequency.exponentialRampToValueAtTime(38, now + 0.38);
+    bG.gain.setValueAtTime(0.0001, now);
+    bG.gain.linearRampToValueAtTime(v * 0.28, now + 0.02);
+    bG.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+    body.connect(bG);
+    bG.connect(merge);
+
+    const sub = ctx.createOscillator();
+    const sG = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(48, now);
+    sub.frequency.exponentialRampToValueAtTime(28, now + 0.5);
+    sG.gain.setValueAtTime(0.0001, now);
+    sG.gain.linearRampToValueAtTime(v * 0.55, now + 0.05);
+    sG.gain.exponentialRampToValueAtTime(0.0001, now + 0.52);
+    sub.connect(sG);
+    sG.connect(merge);
+
+    const pres = ctx.createBiquadFilter();
+    pres.type = 'peaking';
+    pres.frequency.setValueAtTime(380, now);
+    pres.Q.setValueAtTime(0.75, now);
+    pres.gain.setValueAtTime(5, now);
+
+    const outLp = ctx.createBiquadFilter();
+    outLp.type = 'lowpass';
+    outLp.frequency.setValueAtTime(3200, now);
+    merge.connect(pres);
+    pres.connect(outLp);
+    outLp.connect(ctx.destination);
+
+    crumble.start(now);
+    crumble.stop(now + 0.5);
+    body.start(now);
+    body.stop(now + 0.48);
+    sub.start(now);
+    sub.stop(now + 0.55);
+  }
+
+  /** Silk / tension — filtered bed, not a clean beep. */
+  private playWebTense(vol: number): void {
+    if (!this.audioContext || this.settings.muted) return;
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = vol * 1.4;
+
+    const len = Math.floor(ctx.sampleRate * 0.22);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = Math.pow(Math.sin(Math.PI * t), 0.6) * 0.55;
+      ch[i] = (Math.random() * 2 - 1) * env;
+    }
+    for (let i = 1; i < len; i++) {
+      ch[i] = ch[i] * 0.25 + ch[i - 1] * 0.75;
+    }
+
+    const n = ctx.createBufferSource();
+    n.buffer = buf;
+    const nG = ctx.createGain();
+    nG.gain.setValueAtTime(0.0001, now);
+    nG.gain.linearRampToValueAtTime(v * 0.35, now + 0.08);
+    nG.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(480, now);
+    n.connect(nG);
+    nG.connect(lp);
+
+    const hum = ctx.createOscillator();
+    const hG = ctx.createGain();
+    hum.type = 'sine';
+    hum.frequency.setValueAtTime(58 + Math.random() * 6, now);
+    hG.gain.setValueAtTime(0.0001, now);
+    hG.gain.linearRampToValueAtTime(v * 0.18, now + 0.12);
+    hG.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
+    hum.connect(hG);
+
+    const merge = ctx.createGain();
+    merge.gain.value = 1;
+    lp.connect(merge);
+    hG.connect(merge);
+    merge.connect(ctx.destination);
+
+    n.start(now);
+    hum.start(now);
+    hum.stop(now + 0.28);
+    n.stop(now + 0.3);
+  }
+
+  /** Rush / charge air — band noise + thump, not a bright arcade sweep. */
+  private playDashWhoosh(vol: number): void {
+    if (!this.audioContext || this.settings.muted) return;
+    const ctx = this.audioContext;
+    const now = ctx.currentTime;
+    const v = vol * 1.78;
+
+    const len = Math.floor(ctx.sampleRate * 0.08);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = Math.exp(-4.2 * t);
+      ch[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const ns = ctx.createBufferSource();
+    ns.buffer = buf;
+    const nG = ctx.createGain();
+    nG.gain.setValueAtTime(0.0001, now);
+    nG.gain.linearRampToValueAtTime(v * 0.52, now + 0.012);
+    nG.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+    const bpf = ctx.createBiquadFilter();
+    bpf.type = 'bandpass';
+    bpf.frequency.setValueAtTime(420, now);
+    bpf.frequency.exponentialRampToValueAtTime(220, now + 0.06);
+    bpf.Q.setValueAtTime(1.1, now);
+    ns.connect(nG);
+    nG.connect(bpf);
+
+    const th = ctx.createOscillator();
+    const tG = ctx.createGain();
+    th.type = 'sine';
+    th.frequency.setValueAtTime(52, now);
+    th.frequency.exponentialRampToValueAtTime(34, now + 0.11);
+    tG.gain.setValueAtTime(0.0001, now);
+    tG.gain.linearRampToValueAtTime(v * 0.62, now + 0.018);
+    tG.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    th.connect(tG);
+
+    const merge = ctx.createGain();
+    bpf.connect(merge);
+    tG.connect(merge);
+    merge.connect(ctx.destination);
+
+    ns.start(now);
+    th.start(now);
+    ns.stop(now + 0.1);
+    th.stop(now + 0.17);
+  }
+
   // Fallback synthesized sounds
   private playFallbackSound(effect: SoundEffect, volume: number): void {
     if (!this.audioContext || this.settings.muted) return;
     
     const ctx = this.audioContext;
     const now = ctx.currentTime;
-    const vol = volume * this.settings.sfxVolume * this.settings.masterVolume * 0.3;
+    const vol =
+      volume *
+      this.settings.sfxVolume *
+      this.settings.masterVolume *
+      SFX_SYNTH_LEVEL *
+      SFX_SYNTH_PERCEIVED_BOOST;
+
+    if (effect === 'SFX_SHOOT') {
+      this.playOrbShootFallback(vol);
+      return;
+    }
+    if (effect === 'SFX_ENEMY_DEATH') {
+      this.playEnemyDeathHorror(vol);
+      return;
+    }
+    if (effect === 'SFX_WEB') {
+      this.playWebTense(vol);
+      return;
+    }
+    if (effect === 'SFX_DASH') {
+      this.playDashWhoosh(vol);
+      return;
+    }
     
     const oscillator = ctx.createOscillator();
     const gainNode = ctx.createGain();
@@ -311,35 +958,14 @@ class AudioManagerClass {
     gainNode.connect(ctx.destination);
     
     switch (effect) {
-      case 'SFX_SHOOT':
-        oscillator.type = 'square';
-        oscillator.frequency.setValueAtTime(800, now);
-        oscillator.frequency.exponentialRampToValueAtTime(200, now + 0.1);
-        gainNode.gain.setValueAtTime(vol, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-        oscillator.start(now);
-        oscillator.stop(now + 0.1);
-        break;
-        
       case 'SFX_HIT':
-      case 'SFX_ENEMY_HIT':
-        oscillator.type = 'sawtooth';
-        oscillator.frequency.setValueAtTime(200, now);
-        oscillator.frequency.exponentialRampToValueAtTime(50, now + 0.15);
-        gainNode.gain.setValueAtTime(vol, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(165, now);
+        oscillator.frequency.exponentialRampToValueAtTime(48, now + 0.12);
+        gainNode.gain.setValueAtTime(vol * 1.05, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.14);
         oscillator.start(now);
         oscillator.stop(now + 0.15);
-        break;
-        
-      case 'SFX_ENEMY_DEATH':
-        oscillator.type = 'sawtooth';
-        oscillator.frequency.setValueAtTime(400, now);
-        oscillator.frequency.exponentialRampToValueAtTime(30, now + 0.3);
-        gainNode.gain.setValueAtTime(vol * 1.5, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-        oscillator.start(now);
-        oscillator.stop(now + 0.3);
         break;
         
       case 'SFX_PLAYER_HURT':
@@ -407,23 +1033,24 @@ class AudioManagerClass {
         oscillator.stop(now + 0.5);
         break;
         
-      case 'SFX_DASH':
-        oscillator.type = 'sawtooth';
-        oscillator.frequency.setValueAtTime(100, now);
-        oscillator.frequency.exponentialRampToValueAtTime(300, now + 0.1);
-        gainNode.gain.setValueAtTime(vol, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+      case 'SFX_ENEMY_SPIT':
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(142 + Math.random() * 35, now);
+        oscillator.frequency.exponentialRampToValueAtTime(48, now + 0.14);
+        gainNode.gain.setValueAtTime(vol * 0.88, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.17);
         oscillator.start(now);
-        oscillator.stop(now + 0.15);
+        oscillator.stop(now + 0.18);
         break;
-        
-      case 'SFX_WEB':
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(100, now);
-        gainNode.gain.setValueAtTime(vol * 0.3, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+
+      case 'SFX_ENEMY_NEEDLE':
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(520 + Math.random() * 120, now);
+        oscillator.frequency.exponentialRampToValueAtTime(160, now + 0.05);
+        gainNode.gain.setValueAtTime(vol * 0.48, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.008, now + 0.07);
         oscillator.start(now);
-        oscillator.stop(now + 0.2);
+        oscillator.stop(now + 0.075);
         break;
         
       case 'SFX_BOSS_ROAR':
@@ -432,20 +1059,20 @@ class AudioManagerClass {
         oscillator.frequency.setValueAtTime(60, now + 0.2);
         oscillator.frequency.setValueAtTime(100, now + 0.4);
         oscillator.frequency.setValueAtTime(40, now + 0.6);
-        gainNode.gain.setValueAtTime(vol * 2, now);
+        gainNode.gain.setValueAtTime(vol * 2.15, now);
         gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
         oscillator.start(now);
         oscillator.stop(now + 0.8);
         break;
 
       case 'SFX_ENEMY_SKITTER':
-        oscillator.type = 'square';
-        oscillator.frequency.setValueAtTime(420 + Math.random() * 180, now);
-        oscillator.frequency.exponentialRampToValueAtTime(90, now + 0.07);
-        gainNode.gain.setValueAtTime(vol * 0.55, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.09);
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(310 + Math.random() * 140, now);
+        oscillator.frequency.exponentialRampToValueAtTime(95, now + 0.08);
+        gainNode.gain.setValueAtTime(vol * 0.72, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
         oscillator.start(now);
-        oscillator.stop(now + 0.09);
+        oscillator.stop(now + 0.1);
         break;
         
       default:
@@ -466,7 +1093,7 @@ class AudioManagerClass {
     if (this.currentMusicTrack !== track) return false;
     /** Avoid “horror-only” stub: missing buffer + horror used to skip rebuilding the loop. */
     if (
-      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS') &&
+      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS' || track === 'MUSIC_WATER') &&
       this.currentMusic === null
     ) {
       return false;
@@ -474,7 +1101,7 @@ class AudioManagerClass {
     if (track === 'MUSIC_MENU' && this.menuHtmlActive) return true;
     if (this.currentMusic !== null) return true;
     if (
-      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS') &&
+      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS' || track === 'MUSIC_WATER') &&
       this.horrorOscillators.length > 0
     ) {
       return true;
@@ -800,6 +1427,82 @@ class AudioManagerClass {
     this.pendingGameplayMusicFadeInMs = Math.max(0, ms);
   }
 
+  /** Chapter 2 non-boss: subtle fluorescent buzz with random gain dips (no MP3 required). */
+  startFluorescentArcHum(): void {
+    if (typeof window === 'undefined') return;
+    if (!this.audioContext || !this.isInitialized || this.settings.muted) return;
+    if (this.fluorescentHum) return;
+
+    const ctx = this.audioContext;
+    const g = ctx.createGain();
+    const m = this.settings.masterVolume * this.settings.musicVolume;
+    const baseVol = 0.011 * m;
+    g.gain.value = baseVol;
+
+    const freqs = [100, 200, 50];
+    const types: OscillatorType[] = ['square', 'square', 'triangle'];
+    const oscillators: OscillatorNode[] = [];
+    for (let i = 0; i < freqs.length; i++) {
+      const o = ctx.createOscillator();
+      o.type = types[i];
+      o.frequency.value = freqs[i];
+      o.detune.value = (i - 1) * 4;
+      o.connect(g);
+      oscillators.push(o);
+    }
+    g.connect(ctx.destination);
+    for (const o of oscillators) o.start(0);
+    this.fluorescentHum = { gain: g, oscillators };
+
+    const tick = () => {
+      if (!this.fluorescentHum || !this.audioContext) {
+        this.fluorescentRaf = null;
+        return;
+      }
+      const t = this.audioContext.currentTime;
+      const mm = this.settings.masterVolume * this.settings.musicVolume;
+      const b = 0.011 * mm;
+      if (Math.random() < 0.014) {
+        this.fluorescentHum.gain.gain.cancelScheduledValues(t);
+        this.fluorescentHum.gain.gain.setValueAtTime(this.fluorescentHum.gain.gain.value, t);
+        this.fluorescentHum.gain.gain.linearRampToValueAtTime(b * 0.22, t + 0.02);
+        const up = t + 0.05 + Math.random() * 0.07;
+        this.fluorescentHum.gain.gain.linearRampToValueAtTime(b, up);
+      } else {
+        const wobble = b * (0.92 + Math.random() * 0.1);
+        this.fluorescentHum.gain.gain.setTargetAtTime(wobble, t, 0.12);
+      }
+      this.fluorescentRaf = window.requestAnimationFrame(tick);
+    };
+    this.fluorescentRaf = window.requestAnimationFrame(tick);
+  }
+
+  stopFluorescentArcHum(): void {
+    if (this.fluorescentRaf !== null) {
+      cancelAnimationFrame(this.fluorescentRaf);
+      this.fluorescentRaf = null;
+    }
+    if (!this.fluorescentHum) return;
+    for (const o of this.fluorescentHum.oscillators) {
+      try {
+        o.stop();
+      } catch {
+        // ignore
+      }
+      try {
+        o.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      this.fluorescentHum.gain.disconnect();
+    } catch {
+      // ignore
+    }
+    this.fluorescentHum = null;
+  }
+
   /**
    * Fade out menu HTML music, TV buzz, and Web Audio menu buffer; clears menu track state.
    * Call before starting a run so `playMusic(MUSIC_GAME)` does not cut menu audio abruptly.
@@ -894,8 +1597,18 @@ class AudioManagerClass {
     return scheduled;
   }
 
+  /**
+   * After a run (game over / victory → main menu): cancel gameplay fade, ensure audio is
+   * initialized, then switch to menu music so horror/game buffers cannot play over standby.
+   */
+  async returnToMainMenuFromRun(): Promise<void> {
+    this.pendingGameplayMusicFadeInMs = null;
+    await this.initialize().catch(() => undefined);
+    await this.resume().catch(() => undefined);
+    await this.playMusic('MUSIC_MENU');
+  }
+
   private async runPlayMusic(track: MusicTrack): Promise<void> {
-    if (!this.isInitialized) return;
     if (this.audioContext && this.audioContext.state !== 'closed') {
       try {
         await this.audioContext.resume();
@@ -971,7 +1684,7 @@ class AudioManagerClass {
       gameplayFadeIn != null &&
       gameplayFadeIn > 0 &&
       volume > 0 &&
-      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS');
+      (track === 'MUSIC_GAME' || track === 'MUSIC_BOSS' || track === 'MUSIC_WATER');
     if (useGameplayFade) {
       this.currentMusicGain.gain.setValueAtTime(0, t);
       this.currentMusicGain.gain.linearRampToValueAtTime(
@@ -996,6 +1709,7 @@ class AudioManagerClass {
    * `preserveTvStatic`: keep TV static running (menu boot crossfade into MUSIC_MENU).
    */
   hardStopMusicAndBeds(opts?: { preserveTvStatic?: boolean }): void {
+    this.stopFluorescentArcHum();
     if (!opts?.preserveTvStatic) {
       this.stopMenuTvStatic();
       this.stopMenuTvBuzz();
@@ -1085,7 +1799,7 @@ class AudioManagerClass {
   private syncHorrorWithTrack(track: MusicTrack): void {
     if (track === 'MUSIC_MENU') {
       this.stopHorrorAmbience();
-    } else if (track === 'MUSIC_GAME') {
+    } else if (track === 'MUSIC_GAME' || track === 'MUSIC_WATER') {
       this.startHorrorAmbience(false);
     } else if (track === 'MUSIC_BOSS') {
       this.startHorrorAmbience(true);
@@ -1212,7 +1926,7 @@ class AudioManagerClass {
       !this.audioContext ||
       !this.isInitialized ||
       this.settings.muted ||
-      (track !== 'MUSIC_GAME' && track !== 'MUSIC_BOSS')
+      (track !== 'MUSIC_GAME' && track !== 'MUSIC_BOSS' && track !== 'MUSIC_WATER')
     ) {
       return;
     }
@@ -1256,7 +1970,7 @@ class AudioManagerClass {
     }
 
     if (buffer) {
-      this.playBuffer(buffer, v);
+      this.playBuffer(buffer, v * SFX_BUFFER_LEVEL, 1);
     } else {
       this.playFallbackSound('SFX_ENEMY_SKITTER', scale * 0.85);
     }

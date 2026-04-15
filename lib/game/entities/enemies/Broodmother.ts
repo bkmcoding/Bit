@@ -6,28 +6,62 @@ import { ENEMY, COLORS } from '../../utils/constants';
 import { resolveCircleObstacles } from '../../utils/obstacleCollision';
 import { AudioManager } from '../../audio/AudioManager';
 import type { Game } from '../../engine/Game';
+import { CHAPTER_1_LAST_ROOM_INDEX } from '../../rooms/chapterConfig';
 
-type BossPhase = 'idle' | 'spawning' | 'shooting' | 'charging';
+type BossPhase = 'idle' | 'spawning' | 'shooting' | 'charging' | 'sweeping';
 
 /** Health fraction at which Broodmother enrages (second life stage). */
 const STAGE2_THRESHOLD = 0.5;
+
+export type BroodmotherVariant = 'standard' | 'flooded';
 
 export class Broodmother extends Enemy {
   private phase: BossPhase = 'idle';
   private phaseTimer: number = 2;
   private spawnCooldown: number = 0;
   private shootCooldown: number = 0;
+  private sweepAngle: number = 0;
+  private sweepDir: 1 | -1 = 1;
   private legAnimation: number = 0;
   private spawnedChildren: number = 0;
   private prevLifeStage: 1 | 2 = 1;
   private enragePulse: number = 0;
+  public readonly variant: BroodmotherVariant;
 
-  constructor(position: Vector2, game: Game) {
+  constructor(position: Vector2, game: Game, variant: BroodmotherVariant = 'standard') {
     super(position, ENEMY.BROODMOTHER, game);
+    this.variant = variant;
     AudioManager.play('SFX_BOSS_ROAR');
   }
 
-  /** Brood shield: no HP damage while any of her spiders are alive. */
+  /** Sector 12 (chapter 1) Broodmother — slower patterns on easy/medium. */
+  private isChapter1Finale(): boolean {
+    return this.game.roomManager.currentRoomIndex === CHAPTER_1_LAST_ROOM_INDEX;
+  }
+
+  /** Longer phases = easier (chapter 1 only). */
+  private chapter1PaceMult(): number {
+    const d = this.game.difficulty;
+    if (!this.isChapter1Finale()) return 1;
+    if (d === 'easy') return 1.42;
+    if (d === 'hard') return 0.92;
+    return 1.12;
+  }
+
+  /** Flooded abyss variant: slightly more oppressive cadence. */
+  private floodedPaceMult(): number {
+    return this.variant === 'flooded' ? 0.93 : 1;
+  }
+
+  private patternPace(): number {
+    return this.chapter1PaceMult() * this.floodedPaceMult();
+  }
+
+  /**
+   * Brood shield: originally full invulnerability while any brood spider lived.
+   * This felt like "invulnerable most of the time", so we now *mitigate* damage
+   * while the brood is up instead of nullifying it.
+   */
   private broodSpiderCount(): number {
     return this.game.enemies.filter(
       (e) => e instanceof Spider && e.isActive && !e.markedForDeletion
@@ -35,11 +69,16 @@ export class Broodmother extends Enemy {
   }
 
   takeDamage(amount: number): void {
-    if (this.broodSpiderCount() > 0) {
+    const brood = this.broodSpiderCount();
+    if (brood > 0) {
       this.flashTimer = 0.12;
       AudioManager.play('SFX_ENEMY_HIT');
       this.game.particles.emit(this.position, '#7ae8ff', 7, 52);
       this.game.shake(2);
+      // Still allow progress: shield reduces damage instead of blocking it.
+      // Stronger shield when there are more brood spiders alive.
+      const shield = Math.min(0.78, 0.35 + brood * 0.12);
+      super.takeDamage(Math.max(1, Math.round(amount * (1 - shield))));
       return;
     }
     super.takeDamage(amount);
@@ -50,15 +89,25 @@ export class Broodmother extends Enemy {
   }
 
   private broodCap(): number {
-    return this.getLifeStage() === 2 ? 8 : 5;
+    let cap = this.getLifeStage() === 2 ? 5 : 3;
+    if (this.isChapter1Finale() && this.game.difficulty === 'easy') {
+      cap = Math.max(2, cap - 1);
+    }
+    return cap;
+  }
+
+  private ph(phaseSeconds: number): number {
+    return phaseSeconds * this.patternPace();
   }
 
   private spawnInterval(): number {
-    return this.getLifeStage() === 2 ? 0.36 : 0.72;
+    const base = this.getLifeStage() === 2 ? 0.75 : 1.25;
+    return base * this.patternPace();
   }
 
   private shootInterval(): number {
-    return this.getLifeStage() === 2 ? 0.24 : 0.52;
+    const base = this.getLifeStage() === 2 ? 0.24 : 0.52;
+    return base * this.patternPace();
   }
 
   private spreadCount(): number {
@@ -66,11 +115,12 @@ export class Broodmother extends Enemy {
   }
 
   private spreadArc(): number {
-    return this.getLifeStage() === 2 ? Math.PI * 0.45 : Math.PI / 3;
+    // Slightly tighter cone: harder to slip through the same safe gap every time.
+    return this.getLifeStage() === 2 ? Math.PI * 0.4 : Math.PI * 0.3;
   }
 
   private projSpeed(): number {
-    return this.getLifeStage() === 2 ? 86 : 70;
+    return this.getLifeStage() === 2 ? 92 : 74;
   }
 
   private chargeSpeedMult(): number {
@@ -124,6 +174,25 @@ export class Broodmother extends Enemy {
         }
         break;
 
+      case 'sweeping': {
+        // New pattern: a "sweep" that tracks the player with lag and advances
+        // in a consistent direction. Creates an arc you must reposition around.
+        this.velocity.mulMut(0.94);
+        const target = this.position.angleTo(this.game.player.position);
+        const maxTurn = (stage === 2 ? 1.45 : 1.05) * deltaTime;
+        const diff = Math.atan2(Math.sin(target - this.sweepAngle), Math.cos(target - this.sweepAngle));
+        this.sweepAngle += Math.max(-maxTurn, Math.min(maxTurn, diff));
+        // Slow continuous sweep so it doesn't "lock on".
+        this.sweepAngle += this.sweepDir * (stage === 2 ? 0.65 : 0.48) * deltaTime;
+
+        this.shootCooldown -= deltaTime;
+        if (this.shootCooldown <= 0) {
+          this.shootSweepVolley(this.sweepAngle);
+          this.shootCooldown = stage === 2 ? 0.18 : 0.28;
+        }
+        break;
+      }
+
       case 'charging': {
         const dirToPlayer = this.getDirectionToPlayer();
         this.velocity = dirToPlayer.mul(this.speed * this.chargeSpeedMult());
@@ -150,52 +219,92 @@ export class Broodmother extends Enemy {
     }
   }
 
+  private broodAnticipationShake(): void {
+    switch (this.phase) {
+      case 'shooting':
+        this.game.shake(3.2);
+        break;
+      case 'sweeping':
+        this.game.shake(4);
+        AudioManager.play('SFX_WEB', 0.22);
+        break;
+      case 'charging':
+        this.game.shake(5);
+        break;
+      case 'spawning':
+        this.game.shake(3);
+        break;
+      default:
+        break;
+    }
+  }
+
   private nextPhase(currentChildren: number): void {
     const stage = this.getLifeStage();
     const cap = this.broodCap();
 
     if (stage === 2) {
       const r = Math.random();
-      if (r < 0.38) {
+      if (r < 0.28) {
         this.phase = 'charging';
-        this.phaseTimer = 2.1 + Math.random() * 0.5;
-      } else if (r < 0.82) {
+        this.phaseTimer = this.ph(2.1 + Math.random() * 0.5);
+      } else if (r < 0.66) {
         this.phase = 'shooting';
-        this.phaseTimer = 3.4 + Math.random() * 0.6;
-      } else if (currentChildren < cap - 1) {
+        this.phaseTimer = this.ph(3.4 + Math.random() * 0.6);
+      } else if (r < 0.88) {
+        this.phase = 'sweeping';
+        this.phaseTimer = this.ph(2.8 + Math.random() * 0.5);
+        this.sweepAngle = this.position.angleTo(this.game.player.position);
+        this.sweepDir = Math.random() < 0.5 ? 1 : -1;
+        this.shootCooldown = 0.1;
+      } else if (currentChildren < cap && Math.random() < 0.6) {
         this.phase = 'spawning';
-        this.phaseTimer = 2.8;
+        this.phaseTimer = this.ph(2.4);
         this.spawnedChildren = 0;
-        this.spawnCooldown = 0.2;
+        this.spawnCooldown = 0.35;
       } else {
-        this.phase = Math.random() < 0.55 ? 'shooting' : 'charging';
-        this.phaseTimer = this.phase === 'shooting' ? 2.8 : 1.9;
+        this.phase = Math.random() < 0.6 ? 'shooting' : 'charging';
+        this.phaseTimer = this.ph(this.phase === 'shooting' ? 2.6 : 1.85);
       }
+      this.broodAnticipationShake();
       return;
     }
 
     const healthPercent = this.health / this.maxHealth;
     if (healthPercent < 0.35) {
-      this.phase = Math.random() < 0.55 ? 'charging' : 'shooting';
-      this.phaseTimer = this.phase === 'charging' ? 1.85 : 2.6;
-    } else if (currentChildren < 2 && Math.random() < 0.42) {
+      const rr = Math.random();
+      if (rr < 0.25) {
+        this.phase = 'charging';
+        this.phaseTimer = this.ph(1.8);
+      } else if (rr < 0.72) {
+        this.phase = 'shooting';
+        this.phaseTimer = this.ph(2.55);
+      } else {
+        this.phase = 'sweeping';
+        this.phaseTimer = this.ph(2.4);
+        this.sweepAngle = this.position.angleTo(this.game.player.position);
+        this.sweepDir = Math.random() < 0.5 ? 1 : -1;
+        this.shootCooldown = 0.18;
+      }
+    } else if (currentChildren < 1 && Math.random() < 0.24) {
       this.phase = 'spawning';
-      this.phaseTimer = 3;
+      this.phaseTimer = this.ph(2.6);
       this.spawnedChildren = 0;
-      this.spawnCooldown = 0.35;
+      this.spawnCooldown = 0.55;
     } else {
       const rand = Math.random();
       if (rand < 0.28) {
         this.phase = 'idle';
-        this.phaseTimer = 1.4;
+        this.phaseTimer = this.ph(1.4);
       } else if (rand < 0.58) {
         this.phase = 'shooting';
-        this.phaseTimer = 2.4;
+        this.phaseTimer = this.ph(2.4);
       } else {
         this.phase = 'charging';
-        this.phaseTimer = 1.85;
+        this.phaseTimer = this.ph(1.85);
       }
     }
+    this.broodAnticipationShake();
   }
 
   private spawnChild(): void {
@@ -210,13 +319,19 @@ export class Broodmother extends Enemy {
   }
 
   private shootSpread(): void {
+    AudioManager.play('SFX_WEB', 0.28);
     const baseAngle = this.position.angleTo(this.game.player.position);
     const n = this.spreadCount();
     const spread = this.spreadArc();
     const half = (n - 1) / 2;
+    // Break the "same gap every time" feel: a small wave + slight random jitter.
+    const stage = this.getLifeStage();
+    const wave = Math.sin(this.enragePulse * (stage === 2 ? 0.9 : 0.6)) * (stage === 2 ? 0.09 : 0.06);
+    const jitter = (Math.random() - 0.5) * (stage === 2 ? 0.06 : 0.04);
+    const bias = wave + jitter;
 
     for (let i = 0; i < n; i++) {
-      const angle = baseAngle + (i - half) * (spread / Math.max(1, n - 1));
+      const angle = baseAngle + bias + (i - half) * (spread / Math.max(1, n - 1));
       const direction = new Vector2(Math.cos(angle), Math.sin(angle));
 
       const projectile = new Projectile({
@@ -225,8 +340,28 @@ export class Broodmother extends Enemy {
         isPlayerProjectile: false,
         damage: this.damage,
         speed: this.projSpeed(),
+        playerHitKind: 'boss',
       });
 
+      this.game.spawnProjectile(projectile);
+    }
+  }
+
+  private shootSweepVolley(angle: number): void {
+    const stage = this.getLifeStage();
+    const count = stage === 2 ? 3 : 2;
+    const sep = stage === 2 ? 0.12 : 0.16;
+    for (let i = 0; i < count; i++) {
+      const a = angle + (i - (count - 1) / 2) * sep;
+      const direction = new Vector2(Math.cos(a), Math.sin(a));
+      const projectile = new Projectile({
+        position: this.position.clone(),
+        direction,
+        isPlayerProjectile: false,
+        damage: this.damage,
+        speed: this.projSpeed(),
+        playerHitKind: 'boss',
+      });
       this.game.spawnProjectile(projectile);
     }
   }

@@ -35,6 +35,16 @@ const RAW: RoomMoonShaftConfig[] = [
   { originX: 0.08, originY: 0.28, dirX: 0.9, dirY: 0.35, spread: 0.16, strength: 0.52 },
   { originX: 0.55, originY: 0.12, dirX: 0.25, dirY: 0.88, spread: 0.22, strength: 0.56 },
   { originX: 0.22, originY: 0.14, dirX: 0.55, dirY: 0.78, spread: 0.18, strength: 0.42 },
+  // Flooded / toxic sectors (match ROOM_COUNT in roomData)
+  { originX: 0.38, originY: 0.08, dirX: 0.12, dirY: 0.92, spread: 0.2, strength: 0.45 },
+  { originX: 0.82, originY: 0.78, dirX: -0.62, dirY: -0.68, spread: 0.17, strength: 0.44 },
+  { originX: 0.12, originY: 0.48, dirX: 0.88, dirY: 0.12, spread: 0.18, strength: 0.42 },
+  { originX: 0.48, originY: 0.1, dirX: 0.08, dirY: 0.94, spread: 0.23, strength: 0.4 },
+  // Deep arc (rooms 16–19): murkier shafts
+  { originX: 0.72, originY: 0.14, dirX: -0.45, dirY: 0.82, spread: 0.19, strength: 0.38 },
+  { originX: 0.18, originY: 0.82, dirX: 0.55, dirY: -0.72, spread: 0.2, strength: 0.36 },
+  { originX: 0.5, originY: 0.06, dirX: 0.02, dirY: 0.98, spread: 0.24, strength: 0.35 },
+  { originX: 0.92, originY: 0.45, dirX: -0.92, dirY: 0.18, spread: 0.16, strength: 0.33 },
 ];
 
 if (RAW.length !== ROOM_COUNT) {

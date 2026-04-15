@@ -24,9 +24,19 @@ const SHAPES = [
   't-north',
   't-south',
   'plus',
+  'canals',
+  'pump-lanes',
 ] as const;
 type RoomShape = (typeof SHAPES)[number];
-const FURNISH = ['empty', 'pillars_row', 'barrel_pairs', 'side_benches', 'center_cistern'] as const;
+const FURNISH = [
+  'empty',
+  'pillars_row',
+  'barrel_pairs',
+  'side_benches',
+  'center_cistern',
+  'pump_cross',
+  'spill_channels',
+] as const;
 type FurnishKind = (typeof FURNISH)[number];
 
 function mulberry32(seed: number): () => number {
@@ -153,6 +163,25 @@ function stampPlus(walk: boolean[][], tw: number, th: number, mt: number, rng: (
   fillRectWalk(walk, mt, cy - arm, tw - mt, cy + arm + 1, true);
 }
 
+function stampCanals(walk: boolean[][], tw: number, th: number, mt: number): void {
+  const cx = Math.floor(tw / 2);
+  const cy = Math.floor(th / 2);
+  fillRectWalk(walk, mt, mt + 1, tw - mt, th - mt - 1, true);
+  fillRectWalk(walk, cx - 1, mt + 1, cx + 2, th - mt - 1, false);
+  fillRectWalk(walk, mt + 1, cy - 1, tw - mt - 1, cy + 2, false);
+  fillRectWalk(walk, cx - 1, cy - 1, cx + 2, cy + 2, true);
+}
+
+function stampPumpLanes(walk: boolean[][], tw: number, th: number, mt: number): void {
+  fillRectWalk(walk, mt + 1, mt + 1, tw - mt - 1, th - mt - 1, false);
+  const laneW = 3;
+  const laneH = 3;
+  const cx = Math.floor(tw / 2);
+  const cy = Math.floor(th / 2);
+  fillRectWalk(walk, mt + 1, cy - laneH, tw - mt - 1, cy + laneH + 1, true);
+  fillRectWalk(walk, cx - laneW, mt + 1, cx + laneW + 1, th - mt - 1, true);
+}
+
 function doorAnchorsOk(
   walk: boolean[][],
   tw: number,
@@ -230,6 +259,14 @@ function stampShape(
   }
   if (shape === 'plus') {
     stampPlus(walk, tw, th, mt, rng);
+    return;
+  }
+  if (shape === 'canals') {
+    stampCanals(walk, tw, th, mt);
+    return;
+  }
+  if (shape === 'pump-lanes') {
+    stampPumpLanes(walk, tw, th, mt);
     return;
   }
   const bumpH = 3 + Math.floor(rng() * 2);
@@ -380,6 +417,24 @@ function placeStructuredProps(
     return out;
   }
 
+  if (kind === 'pump_cross') {
+    const armW = 12;
+    const armL = Math.max(24, Math.floor(Math.min(iw, ih) * 0.22));
+    const cx = Math.floor((ix0 + ix1) / 2);
+    const cy = Math.floor((iy0 + iy1) / 2);
+    tryPush({ x: cx - armW / 2, y: cy - armL, w: armW, h: armL * 2 });
+    tryPush({ x: cx - armL, y: cy - armW / 2, w: armL * 2, h: armW });
+    return out;
+  }
+
+  if (kind === 'spill_channels') {
+    const ch = 10;
+    const inset = 22;
+    tryPush({ x: ix0 + inset, y: iy0 + 14, w: iw - inset * 2, h: ch });
+    tryPush({ x: ix0 + inset, y: iy1 - 14 - ch, w: iw - inset * 2, h: ch });
+    return out;
+  }
+
   return out;
 }
 
@@ -443,7 +498,8 @@ function generateSpawns(
   const rng = mulberry32(seed ^ 0xcafebabe);
   const placed: Vector2[] = [];
   const spawns: SpawnPoint[] = [];
-  const baseR = enemies.includes('broodmother') ? 22 : 14;
+  const baseR =
+    enemies.includes('broodmother') || enemies.includes('trenchmatriarch') ? 22 : 14;
 
   const fallback = new Vector2(w * 0.5, h * 0.5);
 
@@ -479,7 +535,11 @@ export function generateProceduralContent(bp: RoomBlueprint, runSeed: number): {
   const rng = mulberry32(seed ^ 0x2f6d);
 
   let shape: RoomShape = 'rectangle';
-  if (!bp.isBossRoom) {
+  if (bp.theme === 'flooded') {
+    shape = seed % 2 === 0 ? 'canals' : 'bump-south';
+  } else if (bp.theme === 'toxicworks') {
+    shape = seed % 2 === 0 ? 'pump-lanes' : 't-north';
+  } else if (!bp.isBossRoom) {
     shape = SHAPES[(seed >>> 0) % SHAPES.length];
   }
 
@@ -491,7 +551,11 @@ export function generateProceduralContent(bp: RoomBlueprint, runSeed: number): {
   }
 
   let furnish: FurnishKind = FURNISH[seed % FURNISH.length];
-  if (bp.isBossRoom) {
+  if (bp.theme === 'flooded') {
+    furnish = seed % 2 === 0 ? 'spill_channels' : 'center_cistern';
+  } else if (bp.theme === 'toxicworks') {
+    furnish = seed % 2 === 0 ? 'pump_cross' : 'side_benches';
+  } else if (bp.isBossRoom) {
     furnish = seed % 2 === 0 ? 'pillars_row' : 'empty';
   }
   const props = placeStructuredProps(seed + 3, walk, rw, rh, wt, bp.doors, furnish, !!bp.isBossRoom);
